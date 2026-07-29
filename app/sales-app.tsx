@@ -124,6 +124,13 @@ type Client = ApiRow & {
 const money = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 
+const normalizeProductSearch = (value: unknown) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .trim();
+
 const sankhyaDate = (value: unknown) => {
   const raw = String(value ?? "");
   if (/^\d{8}/.test(raw)) return `${raw.slice(0, 2)}/${raw.slice(2, 4)}/${raw.slice(4, 8)}`;
@@ -1228,14 +1235,33 @@ function NewOrderV2({
   };
 
   const offlineProducts = () => {
-    const term = search.trim().toLowerCase();
+    const term = normalizeProductSearch(search);
+    const tokens = term.split(/\s+/).filter(Boolean);
     return (offlineData?.products ?? [])
-      .filter((item) =>
-        Number(item.CODTAB) === priceCode
-        && (!selectedGroups.length || selectedGroups.includes(Number(item.CODGRUPOPROD)))
-        && (!brand || String(item.MARCA || "SEM MARCA").toUpperCase() === brand.toUpperCase())
-        && (!term || `${item.DESCRPROD} ${item.CODPROD}`.toLowerCase().includes(term)),
-      ) as Product[];
+      .filter((item) => {
+        if (Number(item.CODTAB) !== priceCode) return false;
+        if (term) {
+          const searchable = normalizeProductSearch(
+            `${item.DESCRPROD} ${item.CODPROD} ${item.REFERENCIA || ""} ${item.MARCA || ""}`,
+          );
+          return tokens.every((token) => searchable.includes(token));
+        }
+        return (
+          (!selectedGroups.length || selectedGroups.includes(Number(item.CODGRUPOPROD)))
+          && (!brand || String(item.MARCA || "SEM MARCA").toUpperCase() === brand.toUpperCase())
+        );
+      })
+      .sort((left, right) => {
+        if (!term) return String(left.DESCRPROD).localeCompare(String(right.DESCRPROD), "pt-BR");
+        const leftCode = String(left.CODPROD);
+        const rightCode = String(right.CODPROD);
+        const relevance = (item: ApiRow, code: string) =>
+          code === term ? 0
+            : code.startsWith(term) ? 1
+              : normalizeProductSearch(item.DESCRPROD).startsWith(term) ? 2 : 3;
+        return relevance(left, leftCode) - relevance(right, rightCode)
+          || String(left.DESCRPROD).localeCompare(String(right.DESCRPROD), "pt-BR");
+      }) as Product[];
   };
 
   const currentDraft = (): OrderDraft => ({
@@ -1305,7 +1331,7 @@ function NewOrderV2({
   }, [phase, priceCode, brand, partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
-    if (phase !== "products" || (!selectedGroups.length && !brand)) {
+    if (phase !== "products" || (!selectedGroups.length && !brand && !search.trim())) {
       setProducts([]);
       return;
     }
@@ -1554,7 +1580,7 @@ function NewOrderV2({
               </span>
             </div>
             <div className="product-list">
-              {!selectedGroups.length && !brand ? <div className="empty-state product-filter-empty"><Filter size={22} /> Selecione uma marca ou grupo</div> :
+              {!selectedGroups.length && !brand && !search.trim() ? <div className="empty-state product-filter-empty"><Filter size={22} /> Selecione uma marca, grupo ou pesquise um produto</div> :
                 loadingProducts ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando tabela, estoque e mobilidade...</div> :
                   products.map((product) => (
                     <article key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}`} className={quantityOf(product) ? "selected" : ""}>
@@ -1566,7 +1592,7 @@ function NewOrderV2({
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
                     </article>
                   ))}
-              {(selectedGroups.length > 0 || brand) && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado para os filtros selecionados.</div>}
+              {(selectedGroups.length > 0 || brand || search.trim()) && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado.</div>}
             </div>
           </section>
         )}

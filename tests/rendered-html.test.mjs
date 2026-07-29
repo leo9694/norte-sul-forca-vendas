@@ -106,7 +106,9 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   );
 
   assert.match(source, /function ClientPickerModal/);
-  assert.match(activeFlow, /Selecione uma marca ou grupo/);
+  assert.match(activeFlow, /Selecione uma marca, grupo ou pesquise um produto/);
+  assert.match(source, /normalizeProductSearch/);
+  assert.match(activeFlow, /!selectedGroups\.length && !brand && !search\.trim/);
   assert.match(activeFlow, />Aplicar</);
   assert.match(activeFlow, /Rascunho automático/);
   assert.match(activeFlow, /kind=productGroups/);
@@ -120,15 +122,19 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
 });
 
 test("sends orders through an authenticated Sankhya service session", async () => {
-  const [sankhyaSource, orderSource] = await Promise.all([
+  const [sankhyaSource, orderSource, dataSource] = await Promise.all([
     readFile(path.join(projectRoot, "app", "api", "_lib", "sankhya.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "sankhya", "orders", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "sankhya", "data", "route.ts"), "utf8"),
   ]);
 
   assert.match(sankhyaSource, /mgeSession=/);
   assert.match(sankhyaSource, /A sessão do Sankhya não foi reconhecida/);
   assert.match(sankhyaSource, /SESSION_DURATION_HOURS\s*=\s*12/);
   assert.match(sankhyaSource, /maxAge\s*=\s*SESSION_DURATION_SECONDS/);
+  assert.match(dataSource, /RELEVANCIA/);
+  assert.match(dataSource, /searchTokens\.map/);
+  assert.match(dataSource, /!search && productGroups\.length/);
   assert.match(orderSource, /DHTIPOPER/);
   assert.match(orderSource, /DHTIPVENDA/);
   assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);

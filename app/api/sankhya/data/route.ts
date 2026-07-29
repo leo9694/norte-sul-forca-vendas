@@ -240,12 +240,25 @@ export async function GET(request: Request) {
         .slice(0, 100);
       const brand = safeSearch(url.searchParams.get("brand"));
       if (!partner || !priceCode) return Response.json({ error: "Selecione o cliente e a tabela." }, { status: 400 });
-      if (!productGroups.length && !brand) return Response.json({ rows: [] });
-      const filter = search
-        ? `AND (UPPER(P.DESCRPROD) LIKE '%${search}%' OR TO_CHAR(P.CODPROD) LIKE '%${search}%')`
+      if (!productGroups.length && !brand && !search) return Response.json({ rows: [] });
+      const normalizedSearch = search.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const searchTokens = normalizedSearch.split(/\s+/).filter(Boolean).slice(0, 6);
+      const searchableText = `TRANSLATE(UPPER(NVL(P.DESCRPROD, '') || ' ' || NVL(P.REFERENCIA, '') || ' ' || NVL(P.MARCA, '')), 'ÁÀÃÂÄÉÈÊËÍÌÎÏÓÒÕÔÖÚÙÛÜÇ', 'AAAAAEEEEIIIIOOOOOUUUUC')`;
+      const filter = searchTokens.length
+        ? searchTokens.map((token) =>
+            `AND (${searchableText} LIKE '%${token}%' OR TO_CHAR(P.CODPROD) LIKE '%${token}%')`,
+          ).join("\n")
         : "";
-      const brandFilter = brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
-      const groupFilter = productGroups.length ? `AND P.CODGRUPOPROD IN (${productGroups.join(",")})` : "";
+      const brandFilter = !search && brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
+      const groupFilter = !search && productGroups.length ? `AND P.CODGRUPOPROD IN (${productGroups.join(",")})` : "";
+      const relevance = search
+        ? `CASE
+             WHEN TO_CHAR(P.CODPROD) = '${normalizedSearch}' THEN 0
+             WHEN TO_CHAR(P.CODPROD) LIKE '${normalizedSearch}%' THEN 1
+             WHEN ${searchableText} LIKE '${normalizedSearch}%' THEN 2
+             ELSE 3
+           END`
+        : "0";
       const rows = await executeQuery(session, `
         WITH ESTOQUE AS (
           SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
@@ -269,6 +282,7 @@ export async function GET(request: Request) {
                  NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
                  E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
                  ${priceCode} CODTAB, PR.NUTAB, PR.VLRVENDA,
+                 ${relevance} RELEVANCIA,
                  ROW_NUMBER() OVER (
                    PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
                    ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
@@ -301,7 +315,7 @@ export async function GET(request: Request) {
                 AND CL.CLIENTE = 'S'
                 AND CL.ATIVO = 'S'
            )
-         ORDER BY DESCRPROD, DISPONIVEL DESC
+         ORDER BY RELEVANCIA, DESCRPROD, DISPONIVEL DESC
       `);
       return Response.json({ rows });
     }
