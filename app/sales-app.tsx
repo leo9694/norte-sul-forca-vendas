@@ -13,6 +13,8 @@ import {
   CircleDollarSign,
   ClipboardList,
   CloudCheck,
+  CloudOff,
+  Database,
   FileText,
   Filter,
   Home,
@@ -27,6 +29,7 @@ import {
   PackageCheck,
   Phone,
   Plus,
+  RefreshCw,
   Search,
   Send,
   ShieldCheck,
@@ -39,6 +42,12 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  getLatestOfflineSnapshot,
+  getOfflineSnapshot,
+  OfflineSnapshot,
+  saveOfflineSnapshot,
+} from "./offline-store";
 
 type ApiRow = Record<string, string | number | null>;
 type Partner = ApiRow & {
@@ -56,6 +65,7 @@ type Product = ApiRow & {
   DISPONIVEL: number;
   NUTAB: number;
   VLRVENDA: number;
+  DESCRGRUPOPROD?: string;
 };
 type CartItem = Product & { quantity: number };
 type PriceTable = { CODTAB: number; NOMETAB: string };
@@ -74,6 +84,8 @@ type OrderDraft = {
   observation: string;
   cart: CartItem[];
 };
+
+const OFFLINE_SESSION_KEY = "norte-sul-vendas:offline-session-enabled";
 type Client = ApiRow & {
   CODPARC: number;
   NOMEPARC: string;
@@ -115,16 +127,39 @@ export function SalesApp() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [user, setUser] = useState("Leonardo");
   const [sellerId, setSellerId] = useState(0);
-  const [screen, setScreen] = useState<"orders" | "new" | "clients">("orders");
+  const [sellerName, setSellerName] = useState("");
+  const [screen, setScreen] = useState<"orders" | "new" | "clients" | "more">("orders");
   const [orders, setOrders] = useState<ApiRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
+  const [offlineData, setOfflineData] = useState<OfflineSnapshot | null>(null);
+  const [online, setOnline] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [clientPickerOpen, setClientPickerOpen] = useState(false);
   const [startingPartner, setStartingPartner] = useState<Partner | null>(null);
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [toast, setToast] = useState("");
+
+  const applySnapshot = (snapshot: OfflineSnapshot, replaceOrders = true) => {
+    setOfflineData(snapshot);
+    setUser(snapshot.seller.user);
+    setSellerId(snapshot.seller.sellerId);
+    setSellerName(snapshot.seller.sellerName);
+    setClients(snapshot.clients as Client[]);
+    if (replaceOrders) setOrders(snapshot.orders);
+    setAuthenticated(true);
+  };
+
+  const filterOfflineOrders = (rows: ApiRow[], dateFrom = "", dateTo = "") =>
+    rows.filter((order) => {
+      const raw = String(order.DTNEG ?? "");
+      const date = /^\d{8}/.test(raw)
+        ? `${raw.slice(4, 8)}-${raw.slice(2, 4)}-${raw.slice(0, 2)}`
+        : raw.slice(0, 10);
+      return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
+    });
 
   const loadOrders = async (dateFrom = "", dateTo = "") => {
     setLoadingOrders(true);
@@ -132,16 +167,49 @@ export function SalesApp() {
       const params = new URLSearchParams({ kind: "orders" });
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
-      const result = await api<{ rows: ApiRow[]; user?: string; sellerId?: number }>(`/api/sankhya/data?${params}`);
+      const result = await api<{ rows: ApiRow[]; user?: string; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
       setOrders(result.rows);
       if (result.user) setUser(result.user);
       if (result.sellerId) setSellerId(Number(result.sellerId));
+      if (result.sellerName) setSellerName(String(result.sellerName));
       setAuthenticated(true);
-    } catch {
-      setAuthenticated(false);
+    } catch (error) {
+      const cached = offlineData
+        ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot());
+      if (cached) {
+        applySnapshot(cached, false);
+        setOrders(filterOfflineOrders(cached.orders, dateFrom, dateTo));
+        setToast("Exibindo os pedidos da última carga salva neste aparelho.");
+      } else {
+        setAuthenticated(false);
+        setToast(error instanceof Error ? error.message : "Não foi possível carregar os pedidos.");
+      }
     } finally {
       setLoadingOrders(false);
       setCheckingSession(false);
+    }
+  };
+
+  const makeLoad = async (showSuccess = true) => {
+    if (!navigator.onLine) {
+      setToast("Conecte-se à internet para fazer uma nova carga.");
+      return null;
+    }
+    setSyncing(true);
+    try {
+      const snapshot = await api<OfflineSnapshot>("/api/sankhya/sync");
+      await saveOfflineSnapshot(snapshot);
+      localStorage.setItem(OFFLINE_SESSION_KEY, "true");
+      applySnapshot(snapshot);
+      if (showSuccess) {
+        setToast(`Carga concluída: ${snapshot.clients.length} clientes e ${snapshot.products.length} saldos de produtos.`);
+      }
+      return snapshot;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Não foi possível fazer a carga.");
+      return null;
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -153,6 +221,13 @@ export function SalesApp() {
       setClients(result.rows);
       return result.rows;
     } catch (error) {
+      const cached = offlineData
+        ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot());
+      if (cached) {
+        setOfflineData(cached);
+        setClients(cached.clients as Client[]);
+        return cached.clients as Client[];
+      }
       setToast(error instanceof Error ? error.message : "Não foi possível carregar a carteira.");
       return [];
     } finally {
@@ -200,12 +275,43 @@ export function SalesApp() {
   };
 
   useEffect(() => {
-    loadOrders();
+    const updateConnection = () => setOnline(navigator.onLine);
+    updateConnection();
+    window.addEventListener("online", updateConnection);
+    window.addEventListener("offline", updateConnection);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => null);
+    navigator.storage?.persist?.().catch(() => false);
+
+    const bootstrap = async () => {
+      try {
+        const result = await api<{ rows: ApiRow[]; user?: string; sellerId?: number; sellerName?: string }>(
+          "/api/sankhya/data?kind=orders",
+        );
+        setOrders(result.rows);
+        setUser(result.user || "");
+        setSellerId(Number(result.sellerId || 0));
+        setSellerName(result.sellerName || result.user || "");
+        setAuthenticated(true);
+        localStorage.setItem(OFFLINE_SESSION_KEY, "true");
+        setCheckingSession(false);
+        void makeLoad(false);
+      } catch {
+        const offlineEnabled = localStorage.getItem(OFFLINE_SESSION_KEY) === "true";
+        const cached = offlineEnabled ? await getLatestOfflineSnapshot().catch(() => null) : null;
+        if (cached) applySnapshot(cached);
+        setCheckingSession(false);
+      }
+    };
+    void bootstrap();
+    return () => {
+      window.removeEventListener("online", updateConnection);
+      window.removeEventListener("offline", updateConnection);
+    };
   }, []);
 
   const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
+    if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+    localStorage.setItem(OFFLINE_SESSION_KEY, "false");
     setAuthenticated(false);
     setScreen("orders");
   };
@@ -226,8 +332,10 @@ export function SalesApp() {
         onLogin={(loginData) => {
           setUser(loginData.user);
           setSellerId(loginData.sellerId);
+          setSellerName(loginData.sellerName);
           setAuthenticated(true);
-          loadOrders();
+          localStorage.setItem(OFFLINE_SESSION_KEY, "true");
+          void makeLoad();
         }}
       />
     );
@@ -235,7 +343,7 @@ export function SalesApp() {
 
   return (
     <div className="app-shell">
-      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onClients={showClients} onLogout={logout} />
+      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onClients={showClients} onMore={() => setScreen("more")} onLogout={logout} />
       <main className="main-shell">
         {screen === "orders" ? (
           <OrdersScreen
@@ -254,10 +362,23 @@ export function SalesApp() {
           />
         ) : screen === "clients" ? (
           <ClientsScreen clients={clients} loading={loadingClients} user={user} onLogout={logout} />
+        ) : screen === "more" ? (
+          <MoreScreen
+            user={user}
+            sellerId={sellerId}
+            sellerName={sellerName}
+            online={online}
+            syncing={syncing}
+            snapshot={offlineData}
+            onLoad={() => void makeLoad()}
+            onLogout={logout}
+          />
         ) : (
           <NewOrderV2
             partner={startingPartner!}
             draft={activeDraft}
+            offlineData={offlineData}
+            online={online}
             onSaveDraft={saveDraft}
             onBack={() => {
               setScreen("orders");
@@ -275,7 +396,7 @@ export function SalesApp() {
           />
         )}
       </main>
-      {screen !== "new" && <MobileNav active={screen} onOrders={() => setScreen("orders")} onClients={showClients} />}
+      {screen !== "new" && <MobileNav active={screen} onOrders={() => setScreen("orders")} onClients={showClients} onMore={() => setScreen("more")} />}
       {clientPickerOpen && (
         <ClientPickerModal
           clients={clients}
@@ -311,7 +432,7 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (data: { user: string; sellerId: number }) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (data: { user: string; sellerId: number; sellerName: string }) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -322,12 +443,16 @@ function LoginScreen({ onLogin }: { onLogin: (data: { user: string; sellerId: nu
     setLoading(true);
     setError("");
     try {
-      const result = await api<{ user: string; sellerId: number }>("/api/auth/login", {
+      const result = await api<{ user: string; sellerId: number; sellerName: string }>("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      onLogin({ user: result.user || username, sellerId: Number(result.sellerId) });
+      onLogin({
+        user: result.user || username,
+        sellerId: Number(result.sellerId),
+        sellerName: result.sellerName || result.user || username,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao entrar.");
     } finally {
@@ -399,12 +524,14 @@ function DesktopSidebar({
   user,
   onOrders,
   onClients,
+  onMore,
   onLogout,
 }: {
   active: string;
   user: string;
   onOrders: () => void;
   onClients: () => void;
+  onMore: () => void;
   onLogout: () => void;
 }) {
   return (
@@ -417,6 +544,7 @@ function DesktopSidebar({
         </button>
         <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound size={20} /> Clientes</button>
         <button><MapPin size={20} /> Roteiro</button>
+        <button className={active === "more" ? "active" : ""} onClick={onMore}><Menu size={20} /> Mais</button>
       </nav>
       <div className="sidebar-user">
         <span className="avatar">{user.charAt(0).toUpperCase()}</span>
@@ -620,6 +748,90 @@ function ClientsScreen({
   );
 }
 
+function MoreScreen({
+  user,
+  sellerId,
+  sellerName,
+  online,
+  syncing,
+  snapshot,
+  onLoad,
+  onLogout,
+}: {
+  user: string;
+  sellerId: number;
+  sellerName: string;
+  online: boolean;
+  syncing: boolean;
+  snapshot: OfflineSnapshot | null;
+  onLoad: () => void;
+  onLogout: () => void;
+}) {
+  const lastLoad = snapshot?.syncedAt
+    ? new Date(snapshot.syncedAt).toLocaleString("pt-BR")
+    : "Nenhuma carga realizada";
+
+  return (
+    <div className="page more-page">
+      <header className="mobile-header">
+        <BrandMark compact />
+        <div className="page-title"><h1>Mais</h1><p>Dados e sincronização</p></div>
+        <span className={`connection-dot ${online ? "online" : "offline"}`} title={online ? "Online" : "Offline"} />
+        <button className="avatar" onClick={onLogout}>{user.charAt(0).toUpperCase()}</button>
+      </header>
+      <header className="desktop-header">
+        <div><span className="eyebrow">Área do vendedor</span><h1>Mais</h1><p>Gerencie a carga local e consulte seus dados de acesso.</p></div>
+        <span className={`connection-badge ${online ? "online" : "offline"}`}>
+          {online ? <CloudCheck size={17} /> : <CloudOff size={17} />}
+          {online ? "Conectado" : "Modo offline"}
+        </span>
+      </header>
+
+      <section className="seller-profile-card">
+        <span className="seller-profile-avatar">{(sellerName || user).charAt(0).toUpperCase()}</span>
+        <div>
+          <small>Vendedor logado</small>
+          <h2>{sellerName || user}</h2>
+          <p>Usuário {user} · Código do vendedor {sellerId}</p>
+        </div>
+        <span className={`connection-badge ${online ? "online" : "offline"}`}>
+          {online ? <CloudCheck size={17} /> : <CloudOff size={17} />}
+          {online ? "Online" : "Offline"}
+        </span>
+      </section>
+
+      <section className="load-card">
+        <div className="load-card-icon"><Database size={25} /></div>
+        <div className="load-card-copy">
+          <span className="eyebrow">Dados deste aparelho</span>
+          <h2>Fazer carga</h2>
+          <p>Atualiza clientes, pedidos, tabelas, preços e estoque com os dados atuais do Sankhya.</p>
+          <small>Última carga: {lastLoad}</small>
+        </div>
+        <button className="primary load-button" onClick={onLoad} disabled={!online || syncing}>
+          {syncing ? <><LoaderCircle className="spin" size={19} /> Atualizando...</> : <><RefreshCw size={19} /> Fazer carga</>}
+        </button>
+      </section>
+
+      <section className="offline-summary">
+        <article><UsersRound /><span><small>Clientes salvos</small><strong>{snapshot?.clients.length ?? 0}</strong></span></article>
+        <article><ShoppingBag /><span><small>Pedidos salvos</small><strong>{snapshot?.orders.length ?? 0}</strong></span></article>
+        <article><PackageCheck /><span><small>Saldos com preço</small><strong>{snapshot?.products.length ?? 0}</strong></span></article>
+      </section>
+
+      <div className={`offline-explanation ${online ? "" : "active"}`}>
+        {online ? <CloudCheck size={21} /> : <CloudOff size={21} />}
+        <div>
+          <strong>{online ? "Dados disponíveis offline" : "Você está trabalhando offline"}</strong>
+          <p>Clientes, pedidos, preços e estoque da última carga podem ser consultados. Rascunhos continuam sendo salvos; o envio ao Sankhya exige internet.</p>
+        </div>
+      </div>
+
+      <button className="secondary more-logout" onClick={onLogout}><LogOut size={18} /> Sair do aplicativo</button>
+    </div>
+  );
+}
+
 function ClientPickerModal({
   clients,
   loading,
@@ -662,12 +874,16 @@ function ClientPickerModal({
 function NewOrderV2({
   partner,
   draft,
+  offlineData,
+  online,
   onSaveDraft,
   onBack,
   onSent,
 }: {
   partner: Partner;
   draft: OrderDraft | null;
+  offlineData: OfflineSnapshot | null;
+  online: boolean;
   onSaveDraft: (draft: OrderDraft) => void;
   onBack: () => void;
   onSent: (id: string | undefined, draftId: string) => void;
@@ -695,6 +911,54 @@ function NewOrderV2({
   const total = useMemo(() => cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0), [cart]);
   const totalUnits = cart.reduce((sum, item) => sum + item.quantity, 0);
 
+  const applyOfflineOptions = () => {
+    const cachedPartner = offlineData?.clients.find((item) => Number(item.CODPARC) === Number(partner.CODPARC));
+    if (!offlineData || !cachedPartner) return false;
+    const partnerTable = Number(cachedPartner.CODTAB || 0);
+    const cachedTables = offlineData.tables
+      .filter((table) => Number(table.CODTAB) === partnerTable) as PriceTable[];
+    const cachedNegotiations = offlineData.negotiations as Negotiation[];
+    setTables(cachedTables);
+    setNegotiations(cachedNegotiations);
+    if (!priceCode) setPriceCode(Number(cachedTables[0]?.CODTAB || 0));
+    if (!negotiation) {
+      const preferred = cachedNegotiations.find(
+        (item) => Number(item.CODTIPVENDA) === Number(cachedPartner.CODTIPVENDA),
+      );
+      setNegotiation(Number(preferred?.CODTIPVENDA ?? cachedNegotiations[0]?.CODTIPVENDA ?? 0));
+    }
+    return true;
+  };
+
+  const offlineGroups = () => {
+    if (!offlineData) return [] as ProductGroup[];
+    const unique = new Map<number, ProductGroup>();
+    offlineData.products
+      .filter((item) => Number(item.CODTAB) === priceCode)
+      .forEach((item) => {
+        const code = Number(item.CODGRUPOPROD);
+        if (code && !unique.has(code)) {
+          unique.set(code, {
+            CODGRUPOPROD: code,
+            DESCRGRUPOPROD: String(item.DESCRGRUPOPROD || `Grupo ${code}`),
+          });
+        }
+      });
+    return [...unique.values()].sort((left, right) =>
+      left.DESCRGRUPOPROD.localeCompare(right.DESCRGRUPOPROD, "pt-BR"),
+    );
+  };
+
+  const offlineProducts = () => {
+    const term = search.trim().toLowerCase();
+    return (offlineData?.products ?? [])
+      .filter((item) =>
+        Number(item.CODTAB) === priceCode
+        && Number(item.CODGRUPOPROD) === productGroup
+        && (!term || `${item.DESCRPROD} ${item.CODPROD}`.toLowerCase().includes(term)),
+      ) as Product[];
+  };
+
   const currentDraft = (): OrderDraft => ({
     id: draftId,
     updatedAt: Date.now(),
@@ -711,6 +975,11 @@ function NewOrderV2({
   useEffect(() => {
     setLoading(true);
     setError("");
+    if (!online) {
+      if (!applyOfflineOptions()) setError("Faça uma carga online antes de criar pedidos offline.");
+      setLoading(false);
+      return;
+    }
     api<{ partner: ApiRow; tables: PriceTable[]; negotiations: Negotiation[] }>(
       `/api/sankhya/data?kind=orderOptions&partner=${partner.CODPARC}`,
     )
@@ -726,18 +995,28 @@ function NewOrderV2({
           setNegotiation(Number(preferred?.CODTIPVENDA ?? result.negotiations[0]?.CODTIPVENDA ?? 0));
         }
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        if (!applyOfflineOptions()) setError(err.message);
+      })
       .finally(() => setLoading(false));
-  }, [partner.CODPARC]);
+  }, [partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
     if (phase !== "products" || !priceCode) return;
+    if (!online) {
+      setGroups(offlineGroups());
+      return;
+    }
     api<{ rows: ProductGroup[] }>(
       `/api/sankhya/data?kind=productGroups&partner=${partner.CODPARC}&priceCode=${priceCode}`,
     )
       .then((result) => setGroups(result.rows))
-      .catch((err) => setError(err.message));
-  }, [phase, priceCode, partner.CODPARC]);
+      .catch((err) => {
+        const cached = offlineGroups();
+        if (cached.length) setGroups(cached);
+        else setError(err.message);
+      });
+  }, [phase, priceCode, partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
     if (phase !== "products" || !productGroup) {
@@ -747,6 +1026,11 @@ function NewOrderV2({
     const timer = window.setTimeout(() => {
       setLoadingProducts(true);
       setError("");
+      if (!online) {
+        setProducts(offlineProducts());
+        setLoadingProducts(false);
+        return;
+      }
       const params = new URLSearchParams({
         kind: "products",
         partner: String(partner.CODPARC),
@@ -756,11 +1040,15 @@ function NewOrderV2({
       });
       api<{ rows: Product[] }>(`/api/sankhya/data?${params}`)
         .then((result) => setProducts(result.rows))
-        .catch((err) => setError(err.message))
+        .catch((err) => {
+          const cached = offlineProducts();
+          if (cached.length) setProducts(cached);
+          else setError(err.message);
+        })
         .finally(() => setLoadingProducts(false));
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [phase, productGroup, search, priceCode, partner.CODPARC]);
+  }, [phase, productGroup, search, priceCode, partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
     onSaveDraft(currentDraft());
@@ -785,6 +1073,11 @@ function NewOrderV2({
   };
 
   const sendOrder = async () => {
+    if (!online) {
+      setError("O pedido foi mantido como rascunho. Conecte-se à internet para enviar ao Sankhya.");
+      setShowConfirm(false);
+      return;
+    }
     setSending(true);
     setError("");
     try {
@@ -823,7 +1116,10 @@ function NewOrderV2({
         <button className="back-button" onClick={closeOrder}><ArrowLeft size={20} /></button>
         <div><span className="eyebrow">Pedido de venda</span><h1>{draft ? "Continuar pedido" : "Novo pedido"}</h1></div>
         <span className="draft-saved"><FileText size={15} /> Rascunho automático</span>
-        <span className="sync-badge"><CloudCheck size={16} /> Sankhya online</span>
+        <span className={`sync-badge ${online ? "" : "offline"}`}>
+          {online ? <CloudCheck size={16} /> : <CloudOff size={16} />}
+          {online ? "Sankhya online" : "Modo offline"}
+        </span>
       </header>
 
       <nav className="order-phase-nav" aria-label="Navegação do pedido">
@@ -916,6 +1212,7 @@ function NewOrderV2({
             {observation && <div className="review-observation"><small>Observação</small><p>{observation}</p></div>}
             <div className="order-summary"><span><small>{totalUnits} {totalUnits === 1 ? "unidade" : "unidades"}</small><strong>Total do pedido</strong></span><strong>{money(total)}</strong></div>
             <div className="validation-strip"><span><CheckCircle2 /> Cliente e ICMS</span><span><CheckCircle2 /> Tabela vigente</span><span><CheckCircle2 /> Estoque e mobilidade</span><span><CheckCircle2 /> Negociação ativa</span></div>
+            {!online && <div className="offline-order-notice"><CloudOff size={20} /><span><strong>Rascunho salvo offline</strong><small>Conecte-se à internet para validar os dados atuais e enviar ao Sankhya.</small></span></div>}
           </section>
         )}
         {error && <div className="global-error">{error}</div>}
@@ -924,12 +1221,16 @@ function NewOrderV2({
       <footer className="new-footer">
         <button className="secondary" onClick={phase === "header" ? closeOrder : () => setPhase(phase === "review" ? "products" : "header")}>Voltar</button>
         <div className="footer-total">{phase !== "header" && <><small>{totalUnits} itens</small><strong>{money(total)}</strong></>}</div>
-        <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length)} onClick={() => {
+        <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length) || (phase === "review" && !online)} onClick={() => {
           if (phase === "header") setPhase("products");
           else if (phase === "products") setPhase("review");
           else setShowConfirm(true);
         }}>
-          {phase === "review" ? <><ShieldCheck size={18} /> Validar e enviar</> : <>Continuar <ArrowRight size={18} /></>}
+          {phase === "review"
+            ? online
+              ? <><ShieldCheck size={18} /> Validar e enviar</>
+              : <><CloudOff size={18} /> Aguardando internet</>
+            : <>Continuar <ArrowRight size={18} /></>}
         </button>
       </footer>
 
@@ -1148,10 +1449,12 @@ function MobileNav({
   active,
   onOrders,
   onClients,
+  onMore,
 }: {
-  active: "orders" | "clients";
+  active: "orders" | "clients" | "more";
   onOrders: () => void;
   onClients: () => void;
+  onMore: () => void;
 }) {
   return (
     <nav className="mobile-nav">
@@ -1159,7 +1462,7 @@ function MobileNav({
       <button className={active === "orders" ? "active" : ""} onClick={onOrders}><ShoppingBag /><span>Pedidos</span></button>
       <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound /><span>Clientes</span></button>
       <button><MapPin /><span>Roteiro</span></button>
-      <button><Menu /><span>Mais</span></button>
+      <button className={active === "more" ? "active" : ""} onClick={onMore}><Menu /><span>Mais</span></button>
     </nav>
   );
 }

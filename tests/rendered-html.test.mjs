@@ -62,9 +62,26 @@ test("ships installable PWA files with the current cache policy", async () => {
 
   assert.match(manifest, /"display"\s*:\s*"standalone"/);
   assert.match(manifest, /Norte Sul/);
-  assert.match(serviceWorker, /norte-sul-vendas-v2/);
-  assert.doesNotMatch(serviceWorker, /const SHELL = \[[^\]]*["']\/["']/);
+  assert.match(serviceWorker, /norte-sul-vendas-v3/);
+  assert.match(serviceWorker, /cache\.put\(["']\/["']/);
+  assert.match(serviceWorker, /html\.matchAll/);
+  assert.match(serviceWorker, /cache\.addAll/);
   assert.match(serviceWorker, /response\.ok/);
+});
+
+test("keeps a seller-scoped offline load and manual refresh screen", async () => {
+  const [appSource, storeSource, syncSource] = await Promise.all([
+    readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
+    readFile(path.join(projectRoot, "app", "offline-store.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "sankhya", "sync", "route.ts"), "utf8"),
+  ]);
+
+  assert.match(storeSource, /indexedDB\.open/);
+  assert.match(storeSource, /seller\.sellerId/);
+  assert.match(syncSource, /clients,\s*orders,\s*tables,\s*negotiations,\s*products/);
+  assert.match(appSource, /function MoreScreen/);
+  assert.match(appSource, />Fazer carga</);
+  assert.match(appSource, /Aguardando internet/);
 });
 
 test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {

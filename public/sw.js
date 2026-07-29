@@ -1,8 +1,19 @@
-const CACHE = "norte-sul-vendas-v2";
+const CACHE = "norte-sul-vendas-v3";
 const SHELL = ["/manifest.webmanifest", "/app-icon.svg"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(SHELL);
+    const rootResponse = await fetch("/");
+    if (rootResponse.ok) {
+      const html = await rootResponse.clone().text();
+      const assets = [...html.matchAll(/["'](\/assets\/[^"'?]+\.(?:css|js))["']/g)]
+        .map((match) => match[1]);
+      await cache.put("/", rootResponse);
+      await cache.addAll([...new Set(assets)]);
+    }
+  })());
   self.skipWaiting();
 });
 
@@ -17,15 +28,25 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || new URL(event.request.url).pathname.startsWith("/api/")) return;
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(event.request, copy));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request)),
-  );
+  event.respondWith((async () => {
+    try {
+      const response = await fetch(event.request);
+      if (response.ok) {
+        const cache = await caches.open(CACHE);
+        await cache.put(event.request, response.clone());
+      }
+      return response;
+    } catch {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+      if (event.request.mode === "navigate") {
+        const appShell = await caches.match("/");
+        if (appShell) return appShell;
+      }
+      return new Response("Conteúdo indisponível offline.", {
+        status: 503,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+  })());
 });
