@@ -1381,6 +1381,18 @@ function NewOrderV2({
   const quantityOf = (product: Product) =>
     cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL)?.quantity || 0;
 
+  const clearProductFilters = () => {
+    setBrand("");
+    setPendingBrand("");
+    setSelectedGroups([]);
+    setPendingGroups([]);
+    setExpandedGroups([]);
+    setGroupSearch("");
+    setSearch("");
+    setProducts([]);
+    setError("");
+  };
+
   const groupsByParent = new Map<number, ProductGroup[]>();
   groups.forEach((group) => {
     const parent = Number(group.CODGRUPAI || 0);
@@ -1574,6 +1586,11 @@ function NewOrderV2({
                   Grupo{selectedGroups.length > 0 && <small>{selectedGroups.length}</small>}
                 </button>
               </div>
+              {(brand || selectedGroups.length > 0 || search.trim()) && (
+                <div className="product-filter-actions">
+                  <button onClick={clearProductFilters}><X size={14} /> Limpar filtros</button>
+                </div>
+              )}
               <span className="search-box product-search">
                 <Search size={22} />
                 <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar..." aria-label="Pesquisar produto" />
