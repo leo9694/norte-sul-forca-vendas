@@ -6,6 +6,7 @@ import {
   Bell,
   Box,
   Building2,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -19,10 +20,12 @@ import {
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  Mail,
   MapPin,
   Menu,
   Minus,
   PackageCheck,
+  Phone,
   Plus,
   Search,
   Send,
@@ -55,6 +58,15 @@ type Product = ApiRow & {
   VLRVENDA: number;
 };
 type CartItem = Product & { quantity: number };
+type Client = ApiRow & {
+  CODPARC: number;
+  NOMEPARC: string;
+  CGCCPF?: string;
+  TELEFONE?: string;
+  EMAIL?: string;
+  CODTAB?: number | null;
+  GRUPOICMS?: number | null;
+};
 
 const money = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
@@ -76,15 +88,20 @@ export function SalesApp() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [user, setUser] = useState("Leonardo");
-  const [screen, setScreen] = useState<"orders" | "new">("orders");
+  const [screen, setScreen] = useState<"orders" | "new" | "clients">("orders");
   const [orders, setOrders] = useState<ApiRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
   const [toast, setToast] = useState("");
 
-  const loadOrders = async () => {
+  const loadOrders = async (dateFrom = "", dateTo = "") => {
     setLoadingOrders(true);
     try {
-      const result = await api<{ rows: ApiRow[] }>("/api/sankhya/data?kind=orders");
+      const params = new URLSearchParams({ kind: "orders" });
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      const result = await api<{ rows: ApiRow[] }>(`/api/sankhya/data?${params}`);
       setOrders(result.rows);
       setAuthenticated(true);
     } catch {
@@ -92,6 +109,20 @@ export function SalesApp() {
     } finally {
       setLoadingOrders(false);
       setCheckingSession(false);
+    }
+  };
+
+  const showClients = async () => {
+    setScreen("clients");
+    if (clients.length || loadingClients) return;
+    setLoadingClients(true);
+    try {
+      const result = await api<{ rows: Client[] }>("/api/sankhya/data?kind=portfolio");
+      setClients(result.rows);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Não foi possível carregar a carteira.");
+    } finally {
+      setLoadingClients(false);
     }
   };
 
@@ -130,7 +161,7 @@ export function SalesApp() {
 
   return (
     <div className="app-shell">
-      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onLogout={logout} />
+      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onClients={showClients} onLogout={logout} />
       <main className="main-shell">
         {screen === "orders" ? (
           <OrdersScreen
@@ -138,8 +169,11 @@ export function SalesApp() {
             loading={loadingOrders}
             user={user}
             onNew={() => setScreen("new")}
+            onPeriodChange={loadOrders}
             onLogout={logout}
           />
+        ) : screen === "clients" ? (
+          <ClientsScreen clients={clients} loading={loadingClients} user={user} onLogout={logout} />
         ) : (
           <NewOrder
             onBack={() => setScreen("orders")}
@@ -151,7 +185,7 @@ export function SalesApp() {
           />
         )}
       </main>
-      {screen === "orders" && <MobileNav />}
+      {screen !== "new" && <MobileNav active={screen} onOrders={() => setScreen("orders")} onClients={showClients} />}
       {toast && (
         <button className="toast" onClick={() => setToast("")}>
           <CheckCircle2 size={20} />
@@ -261,11 +295,13 @@ function DesktopSidebar({
   active,
   user,
   onOrders,
+  onClients,
   onLogout,
 }: {
   active: string;
   user: string;
   onOrders: () => void;
+  onClients: () => void;
   onLogout: () => void;
 }) {
   return (
@@ -276,7 +312,7 @@ function DesktopSidebar({
         <button className={active === "orders" || active === "new" ? "active" : ""} onClick={onOrders}>
           <ShoppingBag size={20} /> Pedidos
         </button>
-        <button><UsersRound size={20} /> Clientes</button>
+        <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound size={20} /> Clientes</button>
         <button><MapPin size={20} /> Roteiro</button>
       </nav>
       <div className="sidebar-user">
@@ -293,16 +329,21 @@ function OrdersScreen({
   loading,
   user,
   onNew,
+  onPeriodChange,
   onLogout,
 }: {
   orders: ApiRow[];
   loading: boolean;
   user: string;
   onNew: () => void;
+  onPeriodChange: (dateFrom?: string, dateTo?: string) => void;
   onLogout: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Todos");
+  const [showPeriod, setShowPeriod] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const filtered = orders.filter((order) => {
     const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
     const state = order.STATUSNOTA === "L" ? "Enviados" : "Aguardando";
@@ -325,8 +366,28 @@ function OrdersScreen({
 
       <div className="search-row">
         <label className="search-box"><Search size={21} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pedido ou cliente" /></label>
-        <button className="filter-button"><Filter size={20} /><span>Filtros</span></button>
+        <button className={`filter-button ${dateFrom || dateTo ? "active" : ""}`} onClick={() => setShowPeriod((current) => !current)} aria-expanded={showPeriod}>
+          <Filter size={20} /><span>{dateFrom || dateTo ? "Período ativo" : "Período"}</span>
+        </button>
       </div>
+
+      {showPeriod && (
+        <section className="period-filter">
+          <div><CalendarDays size={20} /><span><strong>Filtrar por período</strong><small>A consulta será refeita diretamente no Sankhya.</small></span></div>
+          <label>De<input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} /></label>
+          <label>Até<input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
+          <button className="secondary" onClick={() => {
+            setDateFrom("");
+            setDateTo("");
+            onPeriodChange("", "");
+            setShowPeriod(false);
+          }}>Limpar</button>
+          <button className="primary" disabled={!dateFrom && !dateTo} onClick={() => {
+            onPeriodChange(dateFrom, dateTo);
+            setShowPeriod(false);
+          }}>Aplicar</button>
+        </section>
+      )}
 
       <div className="filter-chips">
         {["Todos", "Enviados", "Rascunhos", "Aguardando"].map((item) => (
@@ -365,6 +426,78 @@ function OrdersScreen({
 
 function Metric({ icon, label, value, blue }: { icon: React.ReactNode; label: string; value: string; blue?: boolean }) {
   return <div className={`metric ${blue ? "blue" : ""}`}><span>{icon}</span><div><small>{label}</small><strong>{value}</strong></div></div>;
+}
+
+function ClientsScreen({
+  clients,
+  loading,
+  user,
+  onLogout,
+}: {
+  clients: Client[];
+  loading: boolean;
+  user: string;
+  onLogout: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const normalized = query.trim().toLowerCase();
+  const filtered = clients.filter((client) =>
+    `${client.NOMEPARC} ${client.CODPARC} ${client.CGCCPF ?? ""}`.toLowerCase().includes(normalized),
+  );
+  const configured = clients.filter((client) => client.CODTAB != null).length;
+
+  return (
+    <div className="page clients-page">
+      <header className="mobile-header">
+        <BrandMark compact />
+        <div className="page-title"><h1>Clientes</h1><p>Sua carteira no Sankhya</p></div>
+        <button className="icon-button"><Bell size={23} /></button>
+        <button className="avatar" onClick={onLogout}>{user.charAt(0).toUpperCase()}</button>
+      </header>
+      <header className="desktop-header">
+        <div><span className="eyebrow">Carteira comercial</span><h1>Clientes</h1><p>Todos os clientes ativos vinculados ao seu cadastro de vendedor.</p></div>
+      </header>
+
+      <label className="search-box clients-search">
+        <Search size={21} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente por nome, código ou CPF/CNPJ" />
+      </label>
+
+      <section className="metrics client-metrics">
+        <Metric icon={<UsersRound />} label="Clientes na carteira" value={String(clients.length)} />
+        <Metric icon={<CircleDollarSign />} label="Com tabela de preço" value={String(configured)} />
+        <Metric blue icon={<ClipboardList />} label="Sem tabela definida" value={String(clients.length - configured)} />
+      </section>
+
+      <section>
+        <div className="section-heading">
+          <div><span className="eyebrow">Vendedor logado</span><h2>Minha carteira</h2><p>{filtered.length} {filtered.length === 1 ? "cliente encontrado" : "clientes encontrados"}</p></div>
+        </div>
+        <div className="client-grid">
+          {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando toda a carteira...</div> : filtered.map((client) => (
+            <article className="client-card" key={client.CODPARC}>
+              <span className="client-avatar"><Building2 size={20} /></span>
+              <div className="client-main">
+                <strong>{client.NOMEPARC}</strong>
+                <small>Cód. {client.CODPARC}{client.CGCCPF ? ` · ${client.CGCCPF}` : ""}</small>
+                <div className="client-contact">
+                  {client.TELEFONE && <span><Phone size={13} /> {client.TELEFONE}</span>}
+                  {client.EMAIL && <span><Mail size={13} /> {client.EMAIL}</span>}
+                </div>
+              </div>
+              <div className="client-commercial">
+                <span className={client.CODTAB != null ? "configured" : "missing"}>
+                  {client.CODTAB != null ? `Tabela ${client.CODTAB}` : "Sem tabela"}
+                </span>
+                {client.GRUPOICMS != null && <small>Grupo ICMS {client.GRUPOICMS}</small>}
+              </div>
+            </article>
+          ))}
+          {!loading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function NewOrder({ onBack, onSent }: { onBack: () => void; onSent: (id?: string) => void }) {
@@ -562,12 +695,20 @@ function NewOrder({ onBack, onSent }: { onBack: () => void; onSent: (id?: string
   );
 }
 
-function MobileNav() {
+function MobileNav({
+  active,
+  onOrders,
+  onClients,
+}: {
+  active: "orders" | "clients";
+  onOrders: () => void;
+  onClients: () => void;
+}) {
   return (
     <nav className="mobile-nav">
       <button><Home /><span>Início</span></button>
-      <button className="active"><ShoppingBag /><span>Pedidos</span></button>
-      <button><UsersRound /><span>Clientes</span></button>
+      <button className={active === "orders" ? "active" : ""} onClick={onOrders}><ShoppingBag /><span>Pedidos</span></button>
+      <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound /><span>Clientes</span></button>
       <button><MapPin /><span>Roteiro</span></button>
       <button><Menu /><span>Mais</span></button>
     </nav>

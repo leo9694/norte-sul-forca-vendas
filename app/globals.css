@@ -149,6 +149,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .search-box input { border: 0; outline: 0; flex: 1; min-width: 0; color: var(--ink); background: transparent; }
 .search-box.wide { margin-bottom: 18px; }
 .filter-button { border: 1px solid var(--line); background: white; border-radius: 13px; padding: 0 16px; display: flex; align-items: center; gap: 8px; color: var(--green); font-weight: 800; cursor: pointer; }
+.filter-button.active { background: var(--green-soft); border-color: #9fcbb2; }
+.period-filter {
+  display: grid; grid-template-columns: minmax(230px, 1fr) repeat(2, minmax(145px, 190px)) auto auto;
+  gap: 12px; align-items: end; margin: -5px 0 17px; padding: 16px;
+  background: white; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+}
+.period-filter > div { display: flex; align-items: center; gap: 10px; color: var(--green); align-self: center; }
+.period-filter > div strong, .period-filter > div small { display: block; }
+.period-filter > div strong { font-size: 12px; }
+.period-filter > div small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.period-filter label { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.period-filter input { display: block; width: 100%; min-height: 42px; margin-top: 5px; padding: 0 10px; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 9px; }
 .filter-chips { display: flex; gap: 9px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
 .filter-chips::-webkit-scrollbar { display: none; }
 .filter-chips button {
@@ -190,6 +202,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .status.waiting { background: #fff6e9; color: #b7670e; border: 1px solid #f3d8ae; }
 .empty-state { padding: 45px 20px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); background: white; border: 1px dashed var(--line); border-radius: 14px; font-size: 13px; }
 .mobile-fab { display: none; }
+
+/* clients */
+.clients-search { max-width: 650px; margin: 28px 0 0; }
+.client-metrics { grid-template-columns: repeat(3, 1fr); }
+.client-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.client-grid > .empty-state { grid-column: 1 / -1; }
+.client-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 13px; align-items: center;
+  min-height: 92px; padding: 15px; background: white; border: 1px solid var(--line); border-radius: 14px;
+}
+.client-card:hover { border-color: #b8d6c7; box-shadow: 0 8px 22px rgba(19,58,38,.05); }
+.client-main > strong, .client-main > small { display: block; }
+.client-main > strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.client-main > small { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.client-contact { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 9px; }
+.client-contact span { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 8px; }
+.client-commercial { display: grid; justify-items: end; gap: 5px; }
+.client-commercial > span { padding: 6px 8px; border-radius: 7px; font-size: 8px; font-weight: 800; white-space: nowrap; }
+.client-commercial .configured { color: var(--green); background: var(--green-soft); }
+.client-commercial .missing { color: #a55e0b; background: #fff3e2; }
+.client-commercial small { color: var(--muted); font-size: 8px; }
 
 /* new order */
 .new-order-page { padding-bottom: 105px; }
@@ -340,6 +373,9 @@ textarea:focus { border-color: var(--green); }
   .new-footer { left: 0; min-height: 72px; padding: 10px 18px max(10px, env(safe-area-inset-bottom)); }
   .review-grid { grid-template-columns: 1fr; }
   .validation-strip { grid-template-columns: repeat(2,1fr); }
+  .period-filter { grid-template-columns: 1fr 1fr; }
+  .period-filter > div { grid-column: 1 / -1; }
+  .client-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 570px) {
@@ -350,6 +386,9 @@ textarea:focus { border-color: var(--green); }
   .search-row { grid-template-columns: 1fr auto; margin-top: 16px; }
   .filter-button span { display: none; }
   .filter-button { width: 50px; padding: 0; justify-content: center; }
+  .period-filter { grid-template-columns: 1fr 1fr; padding: 13px; }
+  .period-filter > .secondary, .period-filter > .primary { padding: 0 11px; }
+  .clients-search { margin-top: 16px; }
   .filter-chips { margin-right: -16px; padding-right: 16px; }
   .metrics { margin: 18px 0 24px; box-shadow: none; }
   .metric { display: grid; justify-items: center; text-align: center; padding: 13px 5px; }
@@ -377,6 +416,8 @@ textarea:focus { border-color: var(--green); }
   .new-footer .primary { padding: 0 14px; }
   .order-summary > strong { font-size: 17px; }
   .modal-actions { grid-template-columns: 1fr; }
+  .client-card { grid-template-columns: auto minmax(0, 1fr); }
+  .client-commercial { grid-column: 2; justify-items: start; display: flex; align-items: center; flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

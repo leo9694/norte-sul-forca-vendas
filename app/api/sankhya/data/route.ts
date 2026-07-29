@@ -8,6 +8,14 @@ const numeric = (value: string | null, fallback = 0) => {
 const safeSearch = (value: string | null) =>
   (value ?? "").replace(/[^a-zA-ZÀ-ÿ0-9 ._-]/g, "").slice(0, 50).toUpperCase();
 
+const safeDate = (value: string | null) => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return "";
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
+};
+
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
@@ -16,6 +24,12 @@ export async function GET(request: Request) {
     const search = safeSearch(url.searchParams.get("q"));
 
     if (kind === "orders") {
+      const dateFrom = safeDate(url.searchParams.get("dateFrom"));
+      const dateTo = safeDate(url.searchParams.get("dateTo"));
+      const periodFilter = [
+        dateFrom ? `AND C.DTNEG >= TO_DATE('${dateFrom}', 'DD/MM/YYYY')` : "",
+        dateTo ? `AND C.DTNEG < TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1` : "",
+      ].join("\n");
       const rows = await executeQuery(session, `
         SELECT * FROM (
           SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.VLRNOTA, C.STATUSNOTA,
@@ -24,8 +38,24 @@ export async function GET(request: Request) {
             JOIN TGFPAR P ON P.CODPARC = C.CODPARC
            WHERE C.CODTIPOPER = 5 AND C.TIPMOV = 'P'
              AND C.CODVEND = ${session.sellerId}
+             ${periodFilter}
            ORDER BY C.NUNOTA DESC
-        ) WHERE ROWNUM <= 30
+        ) WHERE ROWNUM <= 500
+      `);
+      return Response.json({ rows });
+    }
+
+    if (kind === "portfolio") {
+      const rows = await executeQuery(session, `
+        SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGCCPF,
+               P.TELEFONE, P.EMAIL, P.CODVEND,
+               E.CODEMP, E.GRUPOICMS, E.CODTAB
+          FROM TGFPAR P
+          LEFT JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+         WHERE P.CLIENTE = 'S'
+           AND P.ATIVO = 'S'
+           AND P.CODVEND = ${session.sellerId}
+         ORDER BY P.NOMEPARC
       `);
       return Response.json({ rows });
     }
