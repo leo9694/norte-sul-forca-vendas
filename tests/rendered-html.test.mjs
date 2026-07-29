@@ -84,6 +84,8 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(storeSource, /indexedDB\.open/);
   assert.match(storeSource, /seller\.sellerId/);
   assert.match(syncSource, /clients,\s*orders,\s*tables,\s*negotiations,\s*products/);
+  assert.match(syncSource, /CODGRUPAI/);
+  assert.match(syncSource, /P\.MARCA/);
   assert.match(appSource, /function MoreScreen/);
   assert.match(appSource, />Fazer carga</);
   assert.match(appSource, /Aguardando internet/);
@@ -104,9 +106,13 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   );
 
   assert.match(source, /function ClientPickerModal/);
-  assert.match(activeFlow, /Nenhum filtro selecionado/);
+  assert.match(activeFlow, /Nenhum grupo selecionado/);
   assert.match(activeFlow, /Rascunho automático/);
   assert.match(activeFlow, /kind=productGroups/);
+  assert.match(activeFlow, /Filtrar por grupo/);
+  assert.match(activeFlow, /groups:\s*selectedGroups\.join/);
+  assert.match(activeFlow, /Todas as marcas/);
+  assert.match(activeFlow, /CODGRUPAI/);
   assert.match(activeFlow, /className="order-phase-nav"/);
   assert.match(activeFlow, /Tabela ativa cadastrada neste cliente/);
   assert.doesNotMatch(activeFlow, /className="stepper"/);

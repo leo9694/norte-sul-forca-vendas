@@ -16,6 +16,7 @@ export type OfflineSnapshot = {
   tables: OfflineRow[];
   negotiations: OfflineRow[];
   products: OfflineRow[];
+  productGroups?: OfflineRow[];
 };
 
 const DB_NAME = "norte-sul-forca-vendas";

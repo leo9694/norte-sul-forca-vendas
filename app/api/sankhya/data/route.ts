@@ -144,10 +144,12 @@ export async function GET(request: Request) {
     if (kind === "productGroups") {
       const partner = numeric(url.searchParams.get("partner"));
       const priceCode = numeric(url.searchParams.get("priceCode"));
+      const brand = safeSearch(url.searchParams.get("brand"));
       if (!partner || !priceCode) {
         return Response.json({ error: "Selecione o cliente e a tabela de preço." }, { status: 400 });
       }
-      const rows = await executeQuery(session, `
+      const brandFilter = brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
+      const eligibleItems = `
         WITH ESTOQUE AS (
           SELECT CODPROD, CODLOCAL, CONTROLE,
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
@@ -166,7 +168,8 @@ export async function GET(request: Request) {
              AND T.DTVIGOR <= TRUNC(SYSDATE)
         ),
         ITENS AS (
-          SELECT P.CODGRUPOPROD, PR.VLRVENDA,
+          SELECT P.CODGRUPOPROD, NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
+                 PR.VLRVENDA,
                  ROW_NUMBER() OVER (
                    PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
                    ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
@@ -180,38 +183,68 @@ export async function GET(request: Request) {
                            AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
            WHERE P.ATIVO = 'S'
              AND P.AD_MOBILIDADE = 'S'
+             ${brandFilter}
+             AND EXISTS (
+               SELECT 1
+                 FROM TGFPAR CL
+                 JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
+                WHERE CL.CODPARC = ${partner}
+                  AND CL.CODVEND = ${session.sellerId}
+                  AND CL.CLIENTE = 'S'
+                  AND CL.ATIVO = 'S'
+                  AND PE.CODTAB = ${priceCode}
+             )
         )
-        SELECT DISTINCT G.CODGRUPOPROD, G.DESCRGRUPOPROD
-          FROM TGFGRU G
-          JOIN ITENS I ON I.CODGRUPOPROD = G.CODGRUPOPROD
-                      AND I.RN = 1
-                      AND I.VLRVENDA > 0
-         WHERE G.ATIVO = 'S'
-           AND G.ANALITICO = 'S'
-           AND EXISTS (
-             SELECT 1
-               FROM TGFPAR CL
-               JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
-              WHERE CL.CODPARC = ${partner}
-                AND CL.CODVEND = ${session.sellerId}
-                AND CL.CLIENTE = 'S'
-                AND CL.ATIVO = 'S'
-                AND PE.CODTAB = ${priceCode}
-           )
-         ORDER BY G.DESCRGRUPOPROD
-      `);
-      return Response.json({ rows });
+      `;
+      const [rows, brands] = await Promise.all([
+        executeQuery(session, `
+          ${eligibleItems},
+          ELEGIVEIS AS (
+            SELECT DISTINCT CODGRUPOPROD
+              FROM ITENS
+             WHERE RN = 1 AND VLRVENDA > 0
+          ),
+          ARVORE AS (
+            SELECT G.CODGRUPOPROD, G.DESCRGRUPOPROD, G.CODGRUPAI,
+                   G.GRAU, G.ANALITICO
+              FROM TGFGRU G
+             WHERE G.ATIVO = 'S'
+             START WITH G.CODGRUPOPROD IN (SELECT CODGRUPOPROD FROM ELEGIVEIS)
+           CONNECT BY NOCYCLE PRIOR G.CODGRUPAI = G.CODGRUPOPROD
+          )
+          SELECT DISTINCT A.CODGRUPOPROD, A.DESCRGRUPOPROD, A.CODGRUPAI,
+                 A.GRAU, A.ANALITICO,
+                 CASE WHEN E.CODGRUPOPROD IS NULL THEN 0 ELSE 1 END ELEGIVEL
+            FROM ARVORE A
+            LEFT JOIN ELEGIVEIS E ON E.CODGRUPOPROD = A.CODGRUPOPROD
+           ORDER BY A.GRAU, A.DESCRGRUPOPROD
+        `),
+        executeQuery(session, `
+          ${eligibleItems.replace(brandFilter, "")}
+          SELECT DISTINCT MARCA
+            FROM ITENS
+           WHERE RN = 1 AND VLRVENDA > 0
+           ORDER BY MARCA
+        `),
+      ]);
+      return Response.json({ rows, brands });
     }
 
     if (kind === "products") {
       const partner = numeric(url.searchParams.get("partner"));
       const priceCode = numeric(url.searchParams.get("priceCode"));
-      const productGroup = numeric(url.searchParams.get("group"));
+      const productGroups = (url.searchParams.get("groups") ?? url.searchParams.get("group") ?? "")
+        .split(",")
+        .map((value) => numeric(value))
+        .filter((value, index, values) => value > 0 && values.indexOf(value) === index)
+        .slice(0, 100);
+      const brand = safeSearch(url.searchParams.get("brand"));
       if (!partner || !priceCode) return Response.json({ error: "Selecione o cliente e a tabela." }, { status: 400 });
-      if (!productGroup) return Response.json({ rows: [] });
+      if (!productGroups.length) return Response.json({ rows: [] });
       const filter = search
         ? `AND (UPPER(P.DESCRPROD) LIKE '%${search}%' OR TO_CHAR(P.CODPROD) LIKE '%${search}%')`
         : "";
+      const brandFilter = brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
       const rows = await executeQuery(session, `
         WITH ESTOQUE AS (
           SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
@@ -232,6 +265,7 @@ export async function GET(request: Request) {
         ),
         ITENS AS (
           SELECT P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD,
+                 NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
                  E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
                  ${priceCode} CODTAB, PR.NUTAB, PR.VLRVENDA,
                  ROW_NUMBER() OVER (
@@ -247,10 +281,11 @@ export async function GET(request: Request) {
                            AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
            WHERE P.ATIVO = 'S'
              AND P.AD_MOBILIDADE = 'S'
-             AND P.CODGRUPOPROD = ${productGroup}
+             AND P.CODGRUPOPROD IN (${productGroups.join(",")})
+             ${brandFilter}
              ${filter}
         )
-        SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD,
+        SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, MARCA,
                CODLOCAL, CONTROLE, DISPONIVEL, CODTAB, NUTAB, VLRVENDA
           FROM ITENS
          WHERE RN = 1

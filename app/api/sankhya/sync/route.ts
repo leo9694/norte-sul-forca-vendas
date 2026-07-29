@@ -4,7 +4,7 @@ export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
 
-    const [clients, orders, tables, negotiations, products] = await Promise.all([
+    const [clients, orders, tables, negotiations, products, productGroups] = await Promise.all([
       executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
                P.TELEFONE, P.EMAIL, P.CODVEND,
@@ -90,6 +90,7 @@ export async function GET(request: Request) {
         ITENS AS (
           SELECT PR.CODTAB, P.CODPROD, P.DESCRPROD, P.CODVOL,
                  P.CODGRUPOPROD, G.DESCRGRUPOPROD,
+                 NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
                  E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
                  PR.NUTAB, PR.VLRVENDA,
                  ROW_NUMBER() OVER (
@@ -110,11 +111,18 @@ export async function GET(request: Request) {
              AND G.ANALITICO = 'S'
         )
         SELECT CODTAB, CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD,
-               DESCRGRUPOPROD, CODLOCAL, CONTROLE, DISPONIVEL, NUTAB, VLRVENDA
+               DESCRGRUPOPROD, MARCA, CODLOCAL, CONTROLE,
+               DISPONIVEL, NUTAB, VLRVENDA
           FROM ITENS
          WHERE RN = 1
            AND VLRVENDA > 0
          ORDER BY CODTAB, DESCRGRUPOPROD, DESCRPROD, DISPONIVEL DESC
+      `),
+      executeQuery(session, `
+        SELECT CODGRUPOPROD, DESCRGRUPOPROD, CODGRUPAI, GRAU, ANALITICO
+          FROM TGFGRU
+         WHERE ATIVO = 'S'
+         ORDER BY GRAU, DESCRGRUPOPROD
       `),
     ]);
 
@@ -132,6 +140,7 @@ export async function GET(request: Request) {
       tables,
       negotiations,
       products,
+      productGroups,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Não foi possível fazer a carga.";

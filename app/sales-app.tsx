@@ -42,7 +42,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   getLatestOfflineSnapshot,
   getOfflineSnapshot,
@@ -67,11 +67,20 @@ type Product = ApiRow & {
   NUTAB: number;
   VLRVENDA: number;
   DESCRGRUPOPROD?: string;
+  MARCA?: string;
 };
 type CartItem = Product & { quantity: number };
 type PriceTable = { CODTAB: number; NOMETAB: string };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
-type ProductGroup = { CODGRUPOPROD: number; DESCRGRUPOPROD: string };
+type ProductGroup = {
+  CODGRUPOPROD: number;
+  DESCRGRUPOPROD: string;
+  CODGRUPAI?: number | null;
+  GRAU?: number;
+  ANALITICO?: string;
+  ELEGIVEL?: number;
+};
+type ProductBrand = { MARCA: string };
 type OrderPhase = "header" | "products" | "review";
 type AppScreen = "orders" | "new" | "clients" | "more";
 type AppHistoryView = AppScreen | "client-picker" | "logout";
@@ -80,7 +89,7 @@ type AppHistoryState = {
   view: AppHistoryView;
   baseScreen?: Exclude<AppScreen, "new">;
   phase?: OrderPhase;
-  dialog?: "send";
+  dialog?: "send" | "groups";
 };
 type OrderDraft = {
   id: string;
@@ -1036,12 +1045,18 @@ function NewOrderV2({
   const [tables, setTables] = useState<PriceTable[]>([]);
   const [negotiations, setNegotiations] = useState<Negotiation[]>([]);
   const [groups, setGroups] = useState<ProductGroup[]>([]);
+  const [brands, setBrands] = useState<ProductBrand[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [priceCode, setPriceCode] = useState(Number(draft?.priceCode || 0));
   const [negotiation, setNegotiation] = useState(Number(draft?.negotiation || 0));
   const [observation, setObservation] = useState(draft?.observation ?? "");
   const [cart, setCart] = useState<CartItem[]>(draft?.cart ?? []);
-  const [productGroup, setProductGroup] = useState(0);
+  const [brand, setBrand] = useState("");
+  const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
+  const [pendingGroups, setPendingGroups] = useState<number[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<number[]>([]);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [showGroupFilter, setShowGroupFilter] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingProducts, setLoadingProducts] = useState(false);
@@ -1075,6 +1090,24 @@ function NewOrderV2({
     setShowConfirm(true);
   };
 
+  const openGroupFilter = () => {
+    const current = window.history.state as AppHistoryState | null;
+    setPendingGroups(selectedGroups);
+    setGroupSearch("");
+    window.history.pushState(
+      { ...(current ?? {}), norteSulVendas: true, view: "new", phase, dialog: "groups" } satisfies AppHistoryState,
+      "",
+      window.location.href,
+    );
+    setShowGroupFilter(true);
+  };
+
+  const closeGroupFilter = () => {
+    const current = window.history.state as AppHistoryState | null;
+    if (current?.dialog === "groups") window.history.back();
+    else setShowGroupFilter(false);
+  };
+
   useEffect(() => {
     const initialPhase = draft?.phase ?? "header";
     const current = window.history.state as AppHistoryState | null;
@@ -1093,6 +1126,7 @@ function NewOrderV2({
       if (state?.norteSulVendas && state.view === "new") {
         if (state.phase) setPhase(state.phase);
         setShowConfirm(state.dialog === "send");
+        setShowGroupFilter(state.dialog === "groups");
       }
     };
     window.addEventListener("popstate", handlePhaseBack);
@@ -1120,21 +1154,56 @@ function NewOrderV2({
 
   const offlineGroups = () => {
     if (!offlineData) return [] as ProductGroup[];
-    const unique = new Map<number, ProductGroup>();
-    offlineData.products
-      .filter((item) => Number(item.CODTAB) === priceCode)
-      .forEach((item) => {
-        const code = Number(item.CODGRUPOPROD);
-        if (code && !unique.has(code)) {
-          unique.set(code, {
-            CODGRUPOPROD: code,
-            DESCRGRUPOPROD: String(item.DESCRGRUPOPROD || `Grupo ${code}`),
-          });
-        }
-      });
-    return [...unique.values()].sort((left, right) =>
-      left.DESCRGRUPOPROD.localeCompare(right.DESCRGRUPOPROD, "pt-BR"),
+    const eligible = new Set(
+      offlineData.products
+        .filter((item) =>
+          Number(item.CODTAB) === priceCode
+          && (!brand || String(item.MARCA || "SEM MARCA").toUpperCase() === brand.toUpperCase()),
+        )
+        .map((item) => Number(item.CODGRUPOPROD)),
     );
+    const availableGroups = (offlineData.productGroups ?? []).map((item) => ({
+      CODGRUPOPROD: Number(item.CODGRUPOPROD),
+      DESCRGRUPOPROD: String(item.DESCRGRUPOPROD || `Grupo ${item.CODGRUPOPROD}`),
+      CODGRUPAI: Number(item.CODGRUPAI || 0),
+      GRAU: Number(item.GRAU || 0),
+      ANALITICO: String(item.ANALITICO || "S"),
+      ELEGIVEL: eligible.has(Number(item.CODGRUPOPROD)) ? 1 : 0,
+    }));
+    const byCode = new Map(availableGroups.map((group) => [group.CODGRUPOPROD, group]));
+    const visible = new Set<number>();
+    eligible.forEach((code) => {
+      let current = byCode.get(code);
+      if (!current) {
+        visible.add(code);
+        return;
+      }
+      while (current && !visible.has(current.CODGRUPOPROD)) {
+        visible.add(current.CODGRUPOPROD);
+        current = byCode.get(Number(current.CODGRUPAI || 0));
+      }
+    });
+    const hierarchy = availableGroups.filter((group) => visible.has(group.CODGRUPOPROD));
+    if (hierarchy.length) return hierarchy;
+    return [...eligible].map((code) => {
+      const product = offlineData.products.find((item) => Number(item.CODGRUPOPROD) === code);
+      return {
+        CODGRUPOPROD: code,
+        DESCRGRUPOPROD: String(product?.DESCRGRUPOPROD || `Grupo ${code}`),
+        CODGRUPAI: 0,
+        GRAU: 0,
+        ANALITICO: "S",
+        ELEGIVEL: 1,
+      };
+    });
+  };
+
+  const offlineBrands = () => {
+    const values = new Set<string>();
+    (offlineData?.products ?? [])
+      .filter((item) => Number(item.CODTAB) === priceCode)
+      .forEach((item) => values.add(String(item.MARCA || "SEM MARCA")));
+    return [...values].sort((left, right) => left.localeCompare(right, "pt-BR")).map((MARCA) => ({ MARCA }));
   };
 
   const offlineProducts = () => {
@@ -1142,7 +1211,8 @@ function NewOrderV2({
     return (offlineData?.products ?? [])
       .filter((item) =>
         Number(item.CODTAB) === priceCode
-        && Number(item.CODGRUPOPROD) === productGroup
+        && selectedGroups.includes(Number(item.CODGRUPOPROD))
+        && (!brand || String(item.MARCA || "SEM MARCA").toUpperCase() === brand.toUpperCase())
         && (!term || `${item.DESCRPROD} ${item.CODPROD}`.toLowerCase().includes(term)),
       ) as Product[];
   };
@@ -1192,22 +1262,29 @@ function NewOrderV2({
   useEffect(() => {
     if (phase !== "products" || !priceCode) return;
     if (!online) {
-      setGroups(offlineGroups());
+      const cachedGroups = offlineGroups();
+      setGroups(cachedGroups);
+      setBrands(offlineBrands());
+      setExpandedGroups(cachedGroups.filter((group) => group.ANALITICO !== "S").map((group) => Number(group.CODGRUPOPROD)));
       return;
     }
-    api<{ rows: ProductGroup[] }>(
-      `/api/sankhya/data?kind=productGroups&partner=${partner.CODPARC}&priceCode=${priceCode}`,
+    api<{ rows: ProductGroup[]; brands: ProductBrand[] }>(
+      `/api/sankhya/data?kind=productGroups&partner=${partner.CODPARC}&priceCode=${priceCode}&brand=${encodeURIComponent(brand)}`,
     )
-      .then((result) => setGroups(result.rows))
+      .then((result) => {
+        setGroups(result.rows);
+        setBrands(result.brands);
+        setExpandedGroups(result.rows.filter((group) => group.ANALITICO !== "S").map((group) => Number(group.CODGRUPOPROD)));
+      })
       .catch((err) => {
         const cached = offlineGroups();
         if (cached.length) setGroups(cached);
         else setError(err.message);
       });
-  }, [phase, priceCode, partner.CODPARC, online, offlineData]);
+  }, [phase, priceCode, brand, partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
-    if (phase !== "products" || !productGroup) {
+    if (phase !== "products" || !selectedGroups.length) {
       setProducts([]);
       return;
     }
@@ -1223,7 +1300,8 @@ function NewOrderV2({
         kind: "products",
         partner: String(partner.CODPARC),
         priceCode: String(priceCode),
-        group: String(productGroup),
+        groups: selectedGroups.join(","),
+        brand,
         q: search,
       });
       api<{ rows: Product[] }>(`/api/sankhya/data?${params}`)
@@ -1236,7 +1314,7 @@ function NewOrderV2({
         .finally(() => setLoadingProducts(false));
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [phase, productGroup, search, priceCode, partner.CODPARC, online, offlineData]);
+  }, [phase, selectedGroups.join(","), brand, search, priceCode, partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
     onSaveDraft(currentDraft());
@@ -1254,6 +1332,81 @@ function NewOrderV2({
 
   const quantityOf = (product: Product) =>
     cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL)?.quantity || 0;
+
+  const groupsByParent = new Map<number, ProductGroup[]>();
+  groups.forEach((group) => {
+    const parent = Number(group.CODGRUPAI || 0);
+    groupsByParent.set(parent, [...(groupsByParent.get(parent) ?? []), group]);
+  });
+  groupsByParent.forEach((items) =>
+    items.sort((left, right) => left.DESCRGRUPOPROD.localeCompare(right.DESCRGRUPOPROD, "pt-BR")),
+  );
+  const groupCodes = new Set(groups.map((group) => Number(group.CODGRUPOPROD)));
+  const rootGroups = groups.filter((group) => !groupCodes.has(Number(group.CODGRUPAI || 0)));
+
+  const selectableInBranch = (code: number): number[] => {
+    const current = groups.find((group) => Number(group.CODGRUPOPROD) === code);
+    const own = Number(current?.ELEGIVEL || 0) === 1 ? [code] : [];
+    return [
+      ...own,
+      ...(groupsByParent.get(code) ?? []).flatMap((child) => selectableInBranch(Number(child.CODGRUPOPROD))),
+    ];
+  };
+
+  const togglePendingGroup = (code: number) => {
+    const branch = selectableInBranch(code);
+    const allSelected = branch.length > 0 && branch.every((item) => pendingGroups.includes(item));
+    setPendingGroups((current) =>
+      allSelected
+        ? current.filter((item) => !branch.includes(item))
+        : [...new Set([...current, ...branch])],
+    );
+  };
+
+  const groupMatches = (group: ProductGroup): boolean => {
+    const term = groupSearch.trim().toLocaleLowerCase("pt-BR");
+    if (!term) return true;
+    if (`${group.DESCRGRUPOPROD} ${group.CODGRUPOPROD}`.toLocaleLowerCase("pt-BR").includes(term)) return true;
+    return (groupsByParent.get(Number(group.CODGRUPOPROD)) ?? []).some(groupMatches);
+  };
+
+  const renderGroupBranch = (group: ProductGroup, depth = 0): ReactNode => {
+    if (!groupMatches(group)) return null;
+    const code = Number(group.CODGRUPOPROD);
+    const children = groupsByParent.get(code) ?? [];
+    const isExpanded = expandedGroups.includes(code) || Boolean(groupSearch.trim());
+    const selectable = selectableInBranch(code);
+    const checked = selectable.length > 0 && selectable.every((item) => pendingGroups.includes(item));
+    return (
+      <div className="group-tree-branch" key={code}>
+        <div className="group-tree-row" style={{ paddingLeft: `${depth * 22 + 6}px` }}>
+          {children.length ? (
+            <button
+              className="tree-toggle"
+              aria-label={isExpanded ? "Recolher grupo" : "Expandir grupo"}
+              onClick={() => setExpandedGroups((current) =>
+                current.includes(code) ? current.filter((item) => item !== code) : [...current, code],
+              )}
+            >
+              <ChevronDown className={isExpanded ? "" : "collapsed"} size={19} />
+            </button>
+          ) : <span className="tree-spacer" />}
+          <button className="group-tree-label" onClick={() => togglePendingGroup(code)} disabled={!selectable.length}>
+            <span>{group.DESCRGRUPOPROD}</span>
+            <small>Cód. {code}</small>
+          </button>
+          <input
+            type="checkbox"
+            checked={checked}
+            disabled={!selectable.length}
+            aria-label={`Selecionar ${group.DESCRGRUPOPROD}`}
+            onChange={() => togglePendingGroup(code)}
+          />
+        </div>
+        {children.length > 0 && isExpanded && children.map((child) => renderGroupBranch(child, depth + 1))}
+      </div>
+    );
+  };
 
   const closeOrder = () => {
     onSaveDraft(currentDraft());
@@ -1338,7 +1491,8 @@ function NewOrderV2({
                 <label>Tabela de preço
                   <select className="native-select" value={priceCode} onChange={(event) => {
                     setPriceCode(Number(event.target.value));
-                    setProductGroup(0);
+                    setBrand("");
+                    setSelectedGroups([]);
                     setProducts([]);
                     setCart([]);
                   }}>
@@ -1362,32 +1516,43 @@ function NewOrderV2({
 
         {phase === "products" && (
           <section className="form-section products-section">
-            <div className="section-heading"><div><span className="eyebrow">Itens do pedido</span><h2>Adicionar produtos</h2><p>Selecione um grupo para consultar os produtos da tabela escolhida.</p></div><span className="table-tag">{selectedTable?.NOMETAB || `Tabela ${priceCode}`}</span></div>
+            <div className="section-heading"><div><span className="eyebrow">Itens do pedido</span><h2>Adicionar produtos</h2><p>Filtre por marca e selecione um ou mais grupos na hierarquia.</p></div><span className="table-tag">{selectedTable?.NOMETAB || `Tabela ${priceCode}`}</span></div>
             <div className="product-filters">
-              <label>Grupo de produto
-                <select className="native-select" value={productGroup} onChange={(event) => setProductGroup(Number(event.target.value))}>
-                  <option value={0}>Selecione um grupo</option>
-                  {groups.map((group) => <option key={group.CODGRUPOPROD} value={group.CODGRUPOPROD}>{group.DESCRGRUPOPROD}</option>)}
+              <label>Marca
+                <select className="native-select" value={brand} onChange={(event) => {
+                  setBrand(event.target.value);
+                  setSelectedGroups([]);
+                  setPendingGroups([]);
+                  setProducts([]);
+                }}>
+                  <option value="">Todas as marcas</option>
+                  {brands.map((item) => <option key={item.MARCA} value={item.MARCA}>{item.MARCA}</option>)}
                 </select>
+              </label>
+              <label>Grupo de produto
+                <button className="group-filter-button" onClick={openGroupFilter}>
+                  <span>{selectedGroups.length ? `${selectedGroups.length} ${selectedGroups.length === 1 ? "grupo selecionado" : "grupos selecionados"}` : "Selecionar grupos"}</span>
+                  <ChevronDown size={18} />
+                </button>
               </label>
               <label>Buscar produto
                 <span className="search-box"><Search size={20} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome ou código" /></span>
               </label>
             </div>
             <div className="product-list">
-              {!productGroup ? <div className="empty-state product-filter-empty"><Filter size={22} /> Nenhum filtro selecionado</div> :
+              {!selectedGroups.length ? <div className="empty-state product-filter-empty"><Filter size={22} /> Nenhum grupo selecionado</div> :
                 loadingProducts ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando tabela, estoque e mobilidade...</div> :
                   products.map((product) => (
                     <article key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}`} className={quantityOf(product) ? "selected" : ""}>
                       <span className="product-icon"><Sprout size={22} /></span>
-                      <div className="product-info"><strong>{product.DESCRPROD}</strong><small>Cód. {product.CODPROD} · {product.CODVOL}</small><span><PackageCheck size={14} /> {Number(product.DISPONIVEL).toLocaleString("pt-BR")} disponíveis</span></div>
+                      <div className="product-info"><strong>{product.DESCRPROD}</strong><small>Cód. {product.CODPROD} · {product.CODVOL}{product.MARCA ? ` · ${product.MARCA}` : ""}</small><span><PackageCheck size={14} /> {Number(product.DISPONIVEL).toLocaleString("pt-BR")} disponíveis</span></div>
                       <div className="product-price"><strong>{money(Number(product.VLRVENDA))}</strong><small>por {product.CODVOL}</small></div>
                       {quantityOf(product) ? (
                         <div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div>
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
                     </article>
                   ))}
-              {productGroup > 0 && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado para este grupo e tabela.</div>}
+              {selectedGroups.length > 0 && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado para os filtros selecionados.</div>}
             </div>
           </section>
         )}
@@ -1423,6 +1588,42 @@ function NewOrderV2({
             : <>Continuar <ArrowRight size={18} /></>}
         </button>
       </footer>
+
+      {showGroupFilter && (
+        <div className="modal-backdrop group-filter-backdrop">
+          <div className="group-filter-modal">
+            <header>
+              <div>
+                <span className="eyebrow">Filtrar produtos</span>
+                <h2>Filtrar por grupo</h2>
+                <p>Selecione um ou mais grupos. Os níveis seguem a hierarquia cadastrada no Sankhya.</p>
+              </div>
+              <button className="modal-close" onClick={closeGroupFilter}><X size={20} /></button>
+            </header>
+            {brand && <div className="active-brand-filter"><Leaf size={16} /> Marca: <strong>{brand}</strong></div>}
+            <span className="search-box group-search">
+              <Search size={20} />
+              <input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Procurar grupo..." autoFocus />
+            </span>
+            <div className="group-tree">
+              {rootGroups.length
+                ? rootGroups.map((group) => renderGroupBranch(group))
+                : <div className="empty-state">Nenhum grupo disponível para esta marca e tabela.</div>}
+            </div>
+            <footer>
+              <span>{pendingGroups.length} {pendingGroups.length === 1 ? "grupo selecionado" : "grupos selecionados"}</span>
+              <div className="modal-actions">
+                <button className="secondary" onClick={closeGroupFilter}>Cancelar</button>
+                <button className="primary" onClick={() => {
+                  setSelectedGroups(pendingGroups);
+                  setProducts([]);
+                  closeGroupFilter();
+                }}>Aplicar filtros</button>
+              </div>
+            </footer>
+          </div>
+        </div>
+      )}
 
       {showConfirm && (
         <div className="modal-backdrop">
