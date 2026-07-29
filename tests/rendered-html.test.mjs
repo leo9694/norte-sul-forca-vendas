@@ -120,6 +120,8 @@ test("sends orders through an authenticated Sankhya service session", async () =
 
   assert.match(sankhyaSource, /mgeSession=/);
   assert.match(sankhyaSource, /A sessão do Sankhya não foi reconhecida/);
+  assert.match(sankhyaSource, /SESSION_DURATION_HOURS\s*=\s*12/);
+  assert.match(sankhyaSource, /maxAge\s*=\s*SESSION_DURATION_SECONDS/);
   assert.match(orderSource, /DHTIPOPER/);
   assert.match(orderSource, /DHTIPVENDA/);
   assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);

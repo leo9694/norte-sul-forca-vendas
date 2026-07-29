@@ -1,5 +1,8 @@
 const SESSION_COOKIE = "fv_sankhya_session";
 const encoder = new TextEncoder();
+const SESSION_DURATION_HOURS = 12;
+const SESSION_DURATION_SECONDS = SESSION_DURATION_HOURS * 60 * 60;
+const SESSION_DURATION_MS = SESSION_DURATION_SECONDS * 1000;
 
 export type SankhyaSession = {
   jsessionid: string;
@@ -66,7 +69,7 @@ export async function decodeSession(cookie?: string | null) {
   }
 }
 
-export function sessionCookieHeader(value: string, maxAge = 60 * 60 * 8) {
+export function sessionCookieHeader(value: string, maxAge = SESSION_DURATION_SECONDS) {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
 }
@@ -147,7 +150,7 @@ export async function loginSankhya(username: string, password: string) {
     jsessionid,
     user: username,
     userId,
-    expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+    expiresAt: Date.now() + SESSION_DURATION_MS,
   };
 }
 
@@ -217,7 +220,7 @@ export async function createApplicationSession(username: string, password: strin
       userId: authenticatedUser.userId,
       sellerId,
       sellerName: String(userData.APELIDO || userData.NOMEUSU || username),
-      expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+      expiresAt: Date.now() + SESSION_DURATION_MS,
     } satisfies SankhyaSession;
   } finally {
     await callSankhya(
