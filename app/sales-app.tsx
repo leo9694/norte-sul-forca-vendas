@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   ShoppingBag,
   ShoppingCart,
+  SlidersHorizontal,
   Sprout,
   UserRound,
   UsersRound,
@@ -89,7 +90,7 @@ type AppHistoryState = {
   view: AppHistoryView;
   baseScreen?: Exclude<AppScreen, "new">;
   phase?: OrderPhase;
-  dialog?: "send" | "groups";
+  dialog?: "send" | "groups" | "brand";
 };
 type OrderDraft = {
   id: string;
@@ -1057,6 +1058,7 @@ function NewOrderV2({
   const [expandedGroups, setExpandedGroups] = useState<number[]>([]);
   const [groupSearch, setGroupSearch] = useState("");
   const [showGroupFilter, setShowGroupFilter] = useState(false);
+  const [showBrandFilter, setShowBrandFilter] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingProducts, setLoadingProducts] = useState(false);
@@ -1102,10 +1104,26 @@ function NewOrderV2({
     setShowGroupFilter(true);
   };
 
+  const openBrandFilter = () => {
+    const current = window.history.state as AppHistoryState | null;
+    window.history.pushState(
+      { ...(current ?? {}), norteSulVendas: true, view: "new", phase, dialog: "brand" } satisfies AppHistoryState,
+      "",
+      window.location.href,
+    );
+    setShowBrandFilter(true);
+  };
+
   const closeGroupFilter = () => {
     const current = window.history.state as AppHistoryState | null;
     if (current?.dialog === "groups") window.history.back();
     else setShowGroupFilter(false);
+  };
+
+  const closeBrandFilter = () => {
+    const current = window.history.state as AppHistoryState | null;
+    if (current?.dialog === "brand") window.history.back();
+    else setShowBrandFilter(false);
   };
 
   useEffect(() => {
@@ -1127,6 +1145,7 @@ function NewOrderV2({
         if (state.phase) setPhase(state.phase);
         setShowConfirm(state.dialog === "send");
         setShowGroupFilter(state.dialog === "groups");
+        setShowBrandFilter(state.dialog === "brand");
       }
     };
     window.addEventListener("popstate", handlePhaseBack);
@@ -1516,28 +1535,21 @@ function NewOrderV2({
 
         {phase === "products" && (
           <section className="form-section products-section">
-            <div className="section-heading"><div><span className="eyebrow">Itens do pedido</span><h2>Adicionar produtos</h2><p>Filtre por marca e selecione um ou mais grupos na hierarquia.</p></div><span className="table-tag">{selectedTable?.NOMETAB || `Tabela ${priceCode}`}</span></div>
-            <div className="product-filters">
-              <label>Marca
-                <select className="native-select" value={brand} onChange={(event) => {
-                  setBrand(event.target.value);
-                  setSelectedGroups([]);
-                  setPendingGroups([]);
-                  setProducts([]);
-                }}>
-                  <option value="">Todas as marcas</option>
-                  {brands.map((item) => <option key={item.MARCA} value={item.MARCA}>{item.MARCA}</option>)}
-                </select>
-              </label>
-              <label>Grupo de produto
-                <button className="group-filter-button" onClick={openGroupFilter}>
-                  <span>{selectedGroups.length ? `${selectedGroups.length} ${selectedGroups.length === 1 ? "grupo selecionado" : "grupos selecionados"}` : "Selecionar grupos"}</span>
-                  <ChevronDown size={18} />
+            <div className="compact-product-filters">
+              <div className="product-filter-tabs" role="group" aria-label="Filtros dos produtos">
+                <button className={brand ? "active" : ""} onClick={openBrandFilter}>
+                  Marca{brand && <span className="filter-active-dot" />}
                 </button>
-              </label>
-              <label>Buscar produto
-                <span className="search-box"><Search size={20} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome ou código" /></span>
-              </label>
+                <span />
+                <button className={selectedGroups.length ? "active" : ""} onClick={openGroupFilter}>
+                  Grupo{selectedGroups.length > 0 && <small>{selectedGroups.length}</small>}
+                </button>
+              </div>
+              <span className="search-box product-search">
+                <Search size={22} />
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar..." aria-label="Pesquisar produto" />
+                <SlidersHorizontal size={22} />
+              </span>
             </div>
             <div className="product-list">
               {!selectedGroups.length ? <div className="empty-state product-filter-empty"><Filter size={22} /> Nenhum grupo selecionado</div> :
@@ -1588,6 +1600,39 @@ function NewOrderV2({
             : <>Continuar <ArrowRight size={18} /></>}
         </button>
       </footer>
+
+      {showBrandFilter && (
+        <div className="modal-backdrop group-filter-backdrop">
+          <div className="brand-filter-modal">
+            <header>
+              <div><span className="eyebrow">Filtrar produtos</span><h2>Marca</h2></div>
+              <button className="modal-close" onClick={closeBrandFilter}><X size={20} /></button>
+            </header>
+            <div className="brand-filter-list">
+              <button className={!brand ? "selected" : ""} onClick={() => {
+                setBrand("");
+                setSelectedGroups([]);
+                setPendingGroups([]);
+                setProducts([]);
+                closeBrandFilter();
+              }}>
+                <span>Todas as marcas</span>{!brand && <Check size={19} />}
+              </button>
+              {brands.map((item) => (
+                <button className={brand === item.MARCA ? "selected" : ""} key={item.MARCA} onClick={() => {
+                  setBrand(item.MARCA);
+                  setSelectedGroups([]);
+                  setPendingGroups([]);
+                  setProducts([]);
+                  closeBrandFilter();
+                }}>
+                  <span>{item.MARCA}</span>{brand === item.MARCA && <Check size={19} />}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showGroupFilter && (
         <div className="modal-backdrop group-filter-backdrop">
