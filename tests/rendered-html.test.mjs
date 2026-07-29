@@ -99,8 +99,9 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
 });
 
 test("provides authenticated shared communication between Sankhya users", async () => {
-  const [appSource, usersSource, conversationsSource, messagesSource, chatStore] = await Promise.all([
+  const [appSource, styleSource, usersSource, conversationsSource, messagesSource, chatStore] = await Promise.all([
     readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
+    readFile(path.join(projectRoot, "app", "globals.css"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "chat", "users", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "chat", "conversations", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "chat", "messages", "route.ts"), "utf8"),
@@ -117,6 +118,8 @@ test("provides authenticated shared communication between Sankhya users", async 
   assert.match(messagesSource, /addMessage/);
   assert.match(chatStore, /chat-store\.json/);
   assert.match(chatStore, /mutationQueue/);
+  assert.match(styleSource, /\.chat-shell\s*\{[\s\S]*?min-height:\s*0/);
+  assert.doesNotMatch(styleSource, /\.chat-shell\s*\{[\s\S]*?min-height:\s*520px/);
 });
 
 test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {
