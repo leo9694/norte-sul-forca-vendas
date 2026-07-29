@@ -244,7 +244,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .stepper > div.active, .stepper > div.done { color: var(--green); }
 .stepper > div.active > span, .stepper > div.done > span { color: white; border-color: var(--green); background: var(--green); }
 .new-content { max-width: 980px; margin: 0 auto; }
-.order-workspace { margin-top: 28px; }
+.order-phase-nav {
+  max-width: 980px; margin: 24px auto 0; display: flex; align-items: center; justify-content: center;
+  padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.78);
+  box-shadow: 0 8px 24px rgba(31,61,47,.05);
+}
+.order-phase-nav button {
+  min-width: 150px; min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 9px;
+  padding: 7px 18px; border: 0; border-radius: 10px; background: transparent; color: var(--muted);
+  cursor: pointer; font: inherit; font-size: 11px; font-weight: 800;
+}
+.order-phase-nav button span, .order-phase-nav button small { display: block; text-align: left; }
+.order-phase-nav button small { margin-bottom: 2px; color: inherit; font-size: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+.order-phase-nav button.active { color: var(--green); background: var(--green-soft); }
+.order-phase-nav button:not(:disabled):not(.active):hover { color: var(--green); background: #f5faf7; }
+.order-phase-nav button:disabled { opacity: .42; cursor: not-allowed; }
+.phase-arrow { color: #aebdb5; flex: 0 0 auto; }
+.order-workspace { margin-top: 16px; }
 .form-section { background: white; border: 1px solid var(--line); border-radius: 18px; padding: clamp(20px, 3vw, 32px); box-shadow: var(--shadow); }
 .partner-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; max-height: 450px; overflow: auto; }
 .partner-list > button {
@@ -399,6 +415,7 @@ textarea:focus { border-color: var(--green); }
   .sync-badge { font-size: 0; padding: 9px; }
   .draft-saved { font-size: 0; padding: 9px; }
   .stepper { margin: 22px 0; }
+  .order-phase-nav { margin-top: 18px; }
   .partner-list { grid-template-columns: 1fr; max-height: none; }
   .condition-grid { grid-template-columns: 1fr; }
   .product-list { max-height: none; }
@@ -438,6 +455,11 @@ textarea:focus { border-color: var(--green); }
   .new-header h1 { margin: 0; }
   .stepper::before { left: 11%; right: 11%; }
   .stepper > div small { font-size: 8px; }
+  .order-phase-nav { justify-content: stretch; padding: 4px; }
+  .order-phase-nav button { min-width: 0; flex: 1; min-height: 45px; padding: 6px; gap: 5px; font-size: 9px; }
+  .order-phase-nav button small { display: none; }
+  .order-phase-nav button svg { width: 15px; }
+  .phase-arrow { width: 11px; }
   .form-section { padding: 18px 15px; border-radius: 15px; }
   .product-filters { grid-template-columns: 1fr; }
   .product-list article { grid-template-columns: auto minmax(0,1fr) auto; }

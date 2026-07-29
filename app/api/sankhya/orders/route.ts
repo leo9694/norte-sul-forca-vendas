@@ -49,20 +49,17 @@ export async function POST(request: Request) {
     const partnerData = partnerRows[0] as Record<string, unknown> | undefined;
     if (!partnerData) throw new Error("Cliente fora da carteira ou sem cadastro na empresa 1.");
 
-    const groupFilter = partnerData.GRUPOICMS == null
-      ? "E.GRUPOICMS IS NULL"
-      : `E.GRUPOICMS = ${Number(partnerData.GRUPOICMS)}`;
     const allowedTables = await executeQuery(session, `
       SELECT DISTINCT N.CODTAB
         FROM TGFPAEM E
         JOIN TGFNTA N ON N.CODTAB = E.CODTAB
        WHERE E.CODEMP = 1
-         AND ${groupFilter}
+         AND E.CODPARC = ${partner}
          AND E.CODTAB = ${priceCode}
          AND N.ATIVO = 'S'
          AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
     `);
-    if (!allowedTables.length) throw new Error("Tabela não permitida para o Grupo de ICMS do cliente.");
+    if (!allowedTables.length) throw new Error("Tabela de preço não cadastrada para este cliente na empresa 1.");
 
     const validNegotiations = await executeQuery(session, `
       SELECT V.CODTIPVENDA
@@ -79,42 +76,47 @@ export async function POST(request: Request) {
 
     const productCodes = items.map((item) => item.product).join(",");
     const validRows = await executeQuery(session, `
-      SELECT P.CODPROD, E.CODLOCAL, E.CONTROLE,
-             SUM(E.ESTOQUE - E.RESERVADO) DISPONIVEL,
-             MAX(T.NUTAB) NUTAB,
-             MAX(PX.VLRVENDA) VLRVENDA
-        FROM TGFPRO P
-        JOIN TGFEST E ON E.CODPROD = P.CODPROD AND E.CODEMP = 1 AND E.ATIVO = 'S'
-        JOIN TGFTAB T ON T.CODTAB = ${priceCode}
-                     AND T.NUTAB = (
-                       SELECT MAX(T2.NUTAB)
-                         FROM TGFTAB T2
-                        WHERE T2.CODTAB = ${priceCode}
-                          AND T2.DTVIGOR <= TRUNC(SYSDATE)
-                     )
-        JOIN (
-          SELECT X.CODPROD, MAX(X.VLRVENDA) VLRVENDA
-            FROM TGFEXC X
-           WHERE X.NUTAB = (
-             SELECT MAX(T3.NUTAB)
-               FROM TGFTAB T3
-              WHERE T3.CODTAB = ${priceCode}
-                AND T3.DTVIGOR <= TRUNC(SYSDATE)
-           )
-             AND X.VLRVENDA > 0
-           GROUP BY X.CODPROD
-        ) PX ON PX.CODPROD = P.CODPROD
-       WHERE P.CODPROD IN (${productCodes})
-         AND P.ATIVO = 'S' AND P.AD_MOBILIDADE = 'S'
-         AND EXISTS (
-           SELECT 1
-             FROM TGFEXC X
-            WHERE X.NUTAB = T.NUTAB
-              AND X.CODPROD = P.CODPROD
-              AND X.VLRVENDA > 0
-         )
-       GROUP BY P.CODPROD, E.CODLOCAL, E.CONTROLE
-      HAVING SUM(E.ESTOQUE - E.RESERVADO) > 0
+      WITH ESTOQUE AS (
+        SELECT CODPROD, CODLOCAL, CONTROLE,
+               SUM(ESTOQUE - RESERVADO) DISPONIVEL
+          FROM TGFEST
+         WHERE CODEMP = 1
+           AND ATIVO = 'S'
+           AND CODPROD IN (${productCodes})
+         GROUP BY CODPROD, CODLOCAL, CONTROLE
+        HAVING SUM(ESTOQUE - RESERVADO) > 0
+      ),
+      PRECOS AS (
+        SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
+               NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
+               X.VLRVENDA, T.NUTAB, T.DTVIGOR
+          FROM TGFEXC X
+          JOIN TGFTAB T ON T.NUTAB = X.NUTAB
+         WHERE T.CODTAB = ${priceCode}
+           AND T.DTVIGOR <= TRUNC(SYSDATE)
+           AND X.CODPROD IN (${productCodes})
+      ),
+      ITENS AS (
+        SELECT P.CODPROD, E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
+               PR.NUTAB, PR.VLRVENDA,
+               ROW_NUMBER() OVER (
+                 PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
+                 ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                          CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
+                          CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
+               ) RN
+          FROM TGFPRO P
+          JOIN ESTOQUE E ON E.CODPROD = P.CODPROD
+          JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
+                         AND (PR.CODLOCAL = E.CODLOCAL OR PR.CODLOCAL = 0)
+                         AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
+         WHERE P.ATIVO = 'S'
+           AND P.AD_MOBILIDADE = 'S'
+      )
+      SELECT CODPROD, CODLOCAL, CONTROLE, DISPONIVEL, NUTAB, VLRVENDA
+        FROM ITENS
+       WHERE RN = 1
+         AND VLRVENDA > 0
     `);
     const itemKey = (product: number, location: number, control: unknown) =>
       `${product}|${location}|${String(control ?? "").trim()}`;

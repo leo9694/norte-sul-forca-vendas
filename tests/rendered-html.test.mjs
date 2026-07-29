@@ -78,5 +78,7 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   assert.match(activeFlow, /Nenhum filtro selecionado/);
   assert.match(activeFlow, /Rascunho automático/);
   assert.match(activeFlow, /kind=productGroups/);
+  assert.match(activeFlow, /className="order-phase-nav"/);
+  assert.match(activeFlow, /Tabela ativa cadastrada neste cliente/);
   assert.doesNotMatch(activeFlow, /className="stepper"/);
 });

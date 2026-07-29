@@ -115,16 +115,12 @@ export async function GET(request: Request) {
       const partnerData = partnerRows[0];
       if (!partnerData) return Response.json({ error: "Cliente fora da carteira ou sem cadastro na empresa 1." }, { status: 400 });
 
-      const groupIcms = partnerData.GRUPOICMS;
-      const groupFilter = groupIcms == null
-        ? "E.GRUPOICMS IS NULL"
-        : `E.GRUPOICMS = ${Number(groupIcms)}`;
       const tables = await executeQuery(session, `
         SELECT DISTINCT N.CODTAB, N.NOMETAB
           FROM TGFPAEM E
           JOIN TGFNTA N ON N.CODTAB = E.CODTAB
          WHERE E.CODEMP = 1
-           AND ${groupFilter}
+           AND E.CODPARC = ${partner}
            AND E.CODTAB IS NOT NULL
            AND N.ATIVO = 'S'
            AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
@@ -152,29 +148,55 @@ export async function GET(request: Request) {
         return Response.json({ error: "Selecione o cliente e a tabela de preço." }, { status: 400 });
       }
       const rows = await executeQuery(session, `
+        WITH ESTOQUE AS (
+          SELECT CODPROD, CODLOCAL, CONTROLE,
+                 SUM(ESTOQUE - RESERVADO) DISPONIVEL
+            FROM TGFEST
+           WHERE CODEMP = 1 AND ATIVO = 'S'
+           GROUP BY CODPROD, CODLOCAL, CONTROLE
+          HAVING SUM(ESTOQUE - RESERVADO) > 0
+        ),
+        PRECOS AS (
+          SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
+                 NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
+                 X.VLRVENDA, T.NUTAB, T.DTVIGOR
+            FROM TGFEXC X
+            JOIN TGFTAB T ON T.NUTAB = X.NUTAB
+           WHERE T.CODTAB = ${priceCode}
+             AND T.DTVIGOR <= TRUNC(SYSDATE)
+        ),
+        ITENS AS (
+          SELECT P.CODGRUPOPROD, PR.VLRVENDA,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
+                   ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                            CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
+                            CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
+                 ) RN
+            FROM TGFPRO P
+            JOIN ESTOQUE E ON E.CODPROD = P.CODPROD
+            JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
+                           AND (PR.CODLOCAL = E.CODLOCAL OR PR.CODLOCAL = 0)
+                           AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
+           WHERE P.ATIVO = 'S'
+             AND P.AD_MOBILIDADE = 'S'
+        )
         SELECT DISTINCT G.CODGRUPOPROD, G.DESCRGRUPOPROD
           FROM TGFGRU G
-          JOIN TGFPRO P ON P.CODGRUPOPROD = G.CODGRUPOPROD
-          JOIN TGFEXC X ON X.CODPROD = P.CODPROD
-          JOIN TGFTAB T ON T.NUTAB = X.NUTAB
-         WHERE T.CODTAB = ${priceCode}
-           AND T.NUTAB = (
-             SELECT MAX(T2.NUTAB)
-               FROM TGFTAB T2
-              WHERE T2.CODTAB = ${priceCode}
-                AND T2.DTVIGOR <= TRUNC(SYSDATE)
-           )
-           AND P.ATIVO = 'S'
-           AND P.AD_MOBILIDADE = 'S'
-           AND G.ATIVO = 'S'
+          JOIN ITENS I ON I.CODGRUPOPROD = G.CODGRUPOPROD
+                      AND I.RN = 1
+                      AND I.VLRVENDA > 0
+         WHERE G.ATIVO = 'S'
            AND G.ANALITICO = 'S'
            AND EXISTS (
              SELECT 1
                FROM TGFPAR CL
+               JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
               WHERE CL.CODPARC = ${partner}
                 AND CL.CODVEND = ${session.sellerId}
                 AND CL.CLIENTE = 'S'
                 AND CL.ATIVO = 'S'
+                AND PE.CODTAB = ${priceCode}
            )
          ORDER BY G.DESCRGRUPOPROD
       `);
@@ -191,46 +213,59 @@ export async function GET(request: Request) {
         ? `AND (UPPER(P.DESCRPROD) LIKE '%${search}%' OR TO_CHAR(P.CODPROD) LIKE '%${search}%')`
         : "";
       const rows = await executeQuery(session, `
+        WITH ESTOQUE AS (
+          SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
+                 SUM(ESTOQUE - RESERVADO) DISPONIVEL
+            FROM TGFEST
+           WHERE CODEMP = 1 AND ATIVO = 'S'
+           GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
+          HAVING SUM(ESTOQUE - RESERVADO) > 0
+        ),
+        PRECOS AS (
+          SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
+                 NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
+                 X.VLRVENDA, T.NUTAB, T.DTVIGOR
+            FROM TGFEXC X
+            JOIN TGFTAB T ON T.NUTAB = X.NUTAB
+           WHERE T.CODTAB = ${priceCode}
+             AND T.DTVIGOR <= TRUNC(SYSDATE)
+        ),
+        ITENS AS (
           SELECT P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD,
                  E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
-                 T.CODTAB, T.NUTAB,
-                 MAX(NVL(X.VLRVENDA, 0)) VLRVENDA
+                 ${priceCode} CODTAB, PR.NUTAB, PR.VLRVENDA,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
+                   ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                            CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
+                            CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
+                 ) RN
             FROM TGFPRO P
-            JOIN (
-              SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
-                     SUM(ESTOQUE - RESERVADO) DISPONIVEL
-                FROM TGFEST
-               WHERE CODEMP = 1 AND ATIVO = 'S'
-              GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
-              HAVING SUM(ESTOQUE - RESERVADO) > 0
-            ) E ON E.CODPROD = P.CODPROD
-            JOIN TGFTAB T ON T.CODTAB = ${priceCode}
-                         AND T.NUTAB = (SELECT MAX(T2.NUTAB) FROM TGFTAB T2
-                                       WHERE T2.CODTAB = ${priceCode}
-                                         AND T2.DTVIGOR <= TRUNC(SYSDATE))
-            JOIN TGFEXC X ON X.NUTAB = T.NUTAB AND X.CODPROD = P.CODPROD
-                              AND (X.CODLOCAL = E.CODLOCAL OR X.CODLOCAL = 0)
-                              AND (NVL(TRIM(X.CONTROLE), ' ') = NVL(TRIM(E.CONTROLE), ' ')
-                                   OR NVL(TRIM(X.CONTROLE), ' ') = ' ')
-           WHERE P.ATIVO = 'S' AND P.AD_MOBILIDADE = 'S'
-                 AND P.CODGRUPOPROD = ${productGroup}
-                 AND X.VLRVENDA > 0
-                 AND EXISTS (
-                   SELECT 1
-                     FROM TGFPAR CL
-                     JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
-                     JOIN TGFPAEM GE ON GE.CODEMP = PE.CODEMP
-                    WHERE GE.CODTAB = ${priceCode}
-                      AND (GE.GRUPOICMS = PE.GRUPOICMS OR (GE.GRUPOICMS IS NULL AND PE.GRUPOICMS IS NULL))
-                      AND CL.CODPARC = ${partner}
-                      AND CL.CODVEND = ${session.sellerId}
-                      AND CL.CLIENTE = 'S'
-                      AND CL.ATIVO = 'S'
-                 )
-                 ${filter}
-           GROUP BY P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD,
-                    E.CODLOCAL, E.CONTROLE, E.DISPONIVEL, T.CODTAB, T.NUTAB
-           ORDER BY P.DESCRPROD, E.DISPONIVEL DESC
+            JOIN ESTOQUE E ON E.CODPROD = P.CODPROD
+            JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
+                           AND (PR.CODLOCAL = E.CODLOCAL OR PR.CODLOCAL = 0)
+                           AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
+           WHERE P.ATIVO = 'S'
+             AND P.AD_MOBILIDADE = 'S'
+             AND P.CODGRUPOPROD = ${productGroup}
+             ${filter}
+        )
+        SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD,
+               CODLOCAL, CONTROLE, DISPONIVEL, CODTAB, NUTAB, VLRVENDA
+          FROM ITENS
+         WHERE RN = 1
+           AND VLRVENDA > 0
+           AND EXISTS (
+             SELECT 1
+               FROM TGFPAR CL
+               JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
+              WHERE PE.CODTAB = ${priceCode}
+                AND CL.CODPARC = ${partner}
+                AND CL.CODVEND = ${session.sellerId}
+                AND CL.CLIENTE = 'S'
+                AND CL.ATIVO = 'S'
+           )
+         ORDER BY DESCRPROD, DISPONIVEL DESC
       `);
       return Response.json({ rows });
     }

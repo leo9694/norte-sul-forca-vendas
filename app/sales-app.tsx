@@ -816,10 +816,24 @@ function NewOrderV2({
         <span className="sync-badge"><CloudCheck size={16} /> Sankhya online</span>
       </header>
 
+      <nav className="order-phase-nav" aria-label="Navegação do pedido">
+        <button className={phase === "header" ? "active" : ""} onClick={() => setPhase("header")}>
+          <ClipboardList size={17} /><span><small>Pedido</small>Cabeçalho</span>
+        </button>
+        <ArrowRight className="phase-arrow" size={16} />
+        <button className={phase === "products" ? "active" : ""} disabled={!priceCode || !negotiation} onClick={() => setPhase("products")}>
+          <ShoppingCart size={17} /><span><small>Seleção</small>Produtos</span>
+        </button>
+        <ArrowRight className="phase-arrow" size={16} />
+        <button className={phase === "review" ? "active" : ""} disabled={!cart.length} onClick={() => setPhase("review")}>
+          <CheckCircle2 size={17} /><span><small>Finalização</small>Revisão</span>
+        </button>
+      </nav>
+
       <div className="new-content order-workspace">
         {phase === "header" && (
           <section className="form-section conditions">
-            <div className="section-heading"><div><span className="eyebrow">Cabeçalho do pedido</span><h2>Condições comerciais</h2><p>Escolha a tabela do Grupo de ICMS e o tipo de negociação.</p></div></div>
+            <div className="section-heading"><div><span className="eyebrow">Cabeçalho do pedido</span><h2>Condições comerciais</h2><p>Confira a tabela cadastrada para o cliente e escolha o tipo de negociação.</p></div></div>
             <div className="selected-client"><span className="client-avatar"><Building2 /></span><div><small>Cliente selecionado</small><strong>{partner.NOMEPARC}</strong><span>Cód. {partner.CODPARC}{partner.GRUPOICMS != null ? ` · Grupo ICMS ${partner.GRUPOICMS}` : ""}</span></div></div>
             {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando condições do Sankhya...</div> : (
               <div className="condition-grid">
@@ -835,7 +849,7 @@ function NewOrderV2({
                     <option value={0}>Selecione a tabela</option>
                     {tables.map((table) => <option key={table.CODTAB} value={table.CODTAB}>{table.CODTAB} — {table.NOMETAB}</option>)}
                   </select>
-                  <small>Tabelas ativas permitidas para o Grupo de ICMS do cliente.</small>
+                  <small>Tabela ativa cadastrada neste cliente para a empresa 1.</small>
                 </label>
                 <label>Tipo de negociação
                   <select className="native-select" value={negotiation} onChange={(event) => setNegotiation(Number(event.target.value))}>
