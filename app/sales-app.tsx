@@ -73,6 +73,15 @@ type PriceTable = { CODTAB: number; NOMETAB: string };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
 type ProductGroup = { CODGRUPOPROD: number; DESCRGRUPOPROD: string };
 type OrderPhase = "header" | "products" | "review";
+type AppScreen = "orders" | "new" | "clients" | "more";
+type AppHistoryView = AppScreen | "client-picker" | "logout";
+type AppHistoryState = {
+  norteSulVendas: true;
+  view: AppHistoryView;
+  baseScreen?: Exclude<AppScreen, "new">;
+  phase?: OrderPhase;
+  dialog?: "send";
+};
 type OrderDraft = {
   id: string;
   updatedAt: number;
@@ -134,7 +143,7 @@ export function SalesApp() {
   const [user, setUser] = useState("Leonardo");
   const [sellerId, setSellerId] = useState(0);
   const [sellerName, setSellerName] = useState("");
-  const [screen, setScreen] = useState<"orders" | "new" | "clients" | "more">("orders");
+  const [screen, setScreen] = useState<AppScreen>("orders");
   const [orders, setOrders] = useState<ApiRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
@@ -172,6 +181,24 @@ export function SalesApp() {
         : raw.slice(0, 10);
       return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
     });
+
+  const pushHistoryView = (view: AppHistoryView, baseScreen?: Exclude<AppScreen, "new">) => {
+    const state: AppHistoryState = { norteSulVendas: true, view, baseScreen };
+    window.history.pushState(state, "", window.location.href);
+  };
+
+  const replaceHistoryView = (view: AppHistoryView, baseScreen?: Exclude<AppScreen, "new">) => {
+    const state: AppHistoryState = { norteSulVendas: true, view, baseScreen };
+    window.history.replaceState(state, "", window.location.href);
+  };
+
+  const navigateTo = (nextScreen: Exclude<AppScreen, "new">) => {
+    if (screen === nextScreen && !clientPickerOpen && !logoutConfirmOpen) return;
+    pushHistoryView(nextScreen);
+    setClientPickerOpen(false);
+    setLogoutConfirmOpen(false);
+    setScreen(nextScreen);
+  };
 
   const loadOrders = async (dateFrom = "", dateTo = "") => {
     setLoadingOrders(true);
@@ -256,11 +283,12 @@ export function SalesApp() {
   };
 
   const showClients = async () => {
-    setScreen("clients");
+    navigateTo("clients");
     await loadPortfolio();
   };
 
   const openNewOrder = async () => {
+    pushHistoryView("client-picker", screen === "new" ? "orders" : screen);
     setClientPickerOpen(true);
     await loadPortfolio();
   };
@@ -295,6 +323,24 @@ export function SalesApp() {
   };
 
   useEffect(() => {
+    replaceHistoryView("orders");
+    const handleHistoryBack = (event: PopStateEvent) => {
+      const state = event.state as AppHistoryState | null;
+      const view = state?.norteSulVendas ? state.view : "orders";
+      setLogoutConfirmOpen(view === "logout");
+      setClientPickerOpen(view === "client-picker");
+
+      if (view === "client-picker" || view === "logout") {
+        setScreen(state?.baseScreen ?? "orders");
+        return;
+      }
+
+      setScreen(view);
+      if (view !== "new") {
+        setActiveDraft(null);
+        setStartingPartner(null);
+      }
+    };
     const updateConnection = () => setOnline(navigator.onLine);
     const standalone = window.matchMedia("(display-mode: standalone)").matches
       || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
@@ -312,6 +358,7 @@ export function SalesApp() {
     updateConnection();
     window.addEventListener("online", updateConnection);
     window.addEventListener("offline", updateConnection);
+    window.addEventListener("popstate", handleHistoryBack);
     window.addEventListener("beforeinstallprompt", captureInstallPrompt);
     window.addEventListener("appinstalled", markInstalled);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => null);
@@ -341,10 +388,21 @@ export function SalesApp() {
     return () => {
       window.removeEventListener("online", updateConnection);
       window.removeEventListener("offline", updateConnection);
+      window.removeEventListener("popstate", handleHistoryBack);
       window.removeEventListener("beforeinstallprompt", captureInstallPrompt);
       window.removeEventListener("appinstalled", markInstalled);
     };
   }, []);
+
+  const requestLogout = () => {
+    if (logoutConfirmOpen) return;
+    pushHistoryView("logout", screen === "new" ? "orders" : screen);
+    setLogoutConfirmOpen(true);
+  };
+
+  const closeLogoutConfirmation = () => {
+    if (logoutConfirmOpen) window.history.back();
+  };
 
   const logout = async () => {
     setLoggingOut(true);
@@ -354,6 +412,7 @@ export function SalesApp() {
       setAuthenticated(false);
       setScreen("orders");
       setLogoutConfirmOpen(false);
+      replaceHistoryView("orders");
     } finally {
       setLoggingOut(false);
     }
@@ -386,7 +445,7 @@ export function SalesApp() {
 
   return (
     <div className="app-shell">
-      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onClients={showClients} onMore={() => setScreen("more")} onLogout={() => setLogoutConfirmOpen(true)} />
+      <DesktopSidebar active={screen} user={user} onOrders={() => navigateTo("orders")} onClients={showClients} onMore={() => navigateTo("more")} onLogout={requestLogout} />
       <main className="main-shell">
         {screen === "orders" ? (
           <OrdersScreen
@@ -397,6 +456,7 @@ export function SalesApp() {
             onResume={(draft) => {
               setActiveDraft(draft);
               setStartingPartner(draft.partner);
+              pushHistoryView("new");
               setScreen("new");
             }}
             onPeriodChange={loadOrders}
@@ -417,7 +477,7 @@ export function SalesApp() {
             secureContext={secureContext}
             onInstall={() => void installApplication()}
             onLoad={() => void makeLoad()}
-            onLogout={() => setLogoutConfirmOpen(true)}
+            onLogout={requestLogout}
           />
         ) : (
           <NewOrderV2
@@ -427,13 +487,12 @@ export function SalesApp() {
             online={online}
             onSaveDraft={saveDraft}
             onBack={() => {
-              setScreen("orders");
-              setActiveDraft(null);
-              setStartingPartner(null);
+              window.history.back();
             }}
             onSent={(id, draftId) => {
               removeDraft(draftId);
               setToast(`Pedido ${id || ""} enviado ao Sankhya com sucesso.`);
+              replaceHistoryView("orders");
               setScreen("orders");
               setActiveDraft(null);
               setStartingPartner(null);
@@ -442,16 +501,17 @@ export function SalesApp() {
           />
         )}
       </main>
-      {screen !== "new" && <MobileNav active={screen} onOrders={() => setScreen("orders")} onClients={showClients} onMore={() => setScreen("more")} />}
+      {screen !== "new" && <MobileNav active={screen} onOrders={() => navigateTo("orders")} onClients={showClients} onMore={() => navigateTo("more")} />}
       {clientPickerOpen && (
         <ClientPickerModal
           clients={clients}
           loading={loadingClients}
-          onClose={() => setClientPickerOpen(false)}
+          onClose={() => window.history.back()}
           onSelect={(client) => {
             setStartingPartner(client);
             setActiveDraft(null);
             setClientPickerOpen(false);
+            replaceHistoryView("new");
             setScreen("new");
           }}
         />
@@ -459,12 +519,12 @@ export function SalesApp() {
       {logoutConfirmOpen && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Confirmar saída">
           <div className="confirm-modal logout-confirm-modal">
-            <button className="modal-close" onClick={() => setLogoutConfirmOpen(false)} aria-label="Fechar"><X size={20} /></button>
+            <button className="modal-close" onClick={closeLogoutConfirmation} aria-label="Fechar"><X size={20} /></button>
             <span className="confirm-icon logout-icon"><LogOut size={27} /></span>
             <h2>Deseja sair do aplicativo?</h2>
             <p>Será necessário informar novamente suas credenciais para fazer carga ou enviar pedidos. Seus dados offline e rascunhos continuarão salvos neste aparelho.</p>
             <div className="modal-actions">
-              <button className="secondary" onClick={() => setLogoutConfirmOpen(false)} disabled={loggingOut}>Cancelar</button>
+              <button className="secondary" onClick={closeLogoutConfirmation} disabled={loggingOut}>Cancelar</button>
               <button className="primary logout-action" onClick={logout} disabled={loggingOut}>
                 {loggingOut ? <LoaderCircle className="spin" size={18} /> : <><LogOut size={18} /> Sim, sair</>}
               </button>
@@ -994,6 +1054,51 @@ function NewOrderV2({
   const total = useMemo(() => cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0), [cart]);
   const totalUnits = cart.reduce((sum, item) => sum + item.quantity, 0);
 
+  const goToPhase = (nextPhase: OrderPhase) => {
+    if (nextPhase === phase) return;
+    const current = window.history.state as AppHistoryState | null;
+    window.history.pushState(
+      { ...(current ?? {}), norteSulVendas: true, view: "new", phase: nextPhase } satisfies AppHistoryState,
+      "",
+      window.location.href,
+    );
+    setPhase(nextPhase);
+  };
+
+  const openSendConfirmation = () => {
+    const current = window.history.state as AppHistoryState | null;
+    window.history.pushState(
+      { ...(current ?? {}), norteSulVendas: true, view: "new", phase, dialog: "send" } satisfies AppHistoryState,
+      "",
+      window.location.href,
+    );
+    setShowConfirm(true);
+  };
+
+  useEffect(() => {
+    const initialPhase = draft?.phase ?? "header";
+    const current = window.history.state as AppHistoryState | null;
+    if (current?.norteSulVendas && current.view === "new") {
+      window.history.replaceState({ ...current, phase: "header" } satisfies AppHistoryState, "", window.location.href);
+      if (initialPhase === "products" || initialPhase === "review") {
+        window.history.pushState({ ...current, phase: "products" } satisfies AppHistoryState, "", window.location.href);
+      }
+      if (initialPhase === "review") {
+        window.history.pushState({ ...current, phase: "review" } satisfies AppHistoryState, "", window.location.href);
+      }
+    }
+
+    const handlePhaseBack = (event: PopStateEvent) => {
+      const state = event.state as AppHistoryState | null;
+      if (state?.norteSulVendas && state.view === "new") {
+        if (state.phase) setPhase(state.phase);
+        setShowConfirm(state.dialog === "send");
+      }
+    };
+    window.addEventListener("popstate", handlePhaseBack);
+    return () => window.removeEventListener("popstate", handlePhaseBack);
+  }, []);
+
   const applyOfflineOptions = () => {
     const cachedPartner = offlineData?.clients.find((item) => Number(item.CODPARC) === Number(partner.CODPARC));
     if (!offlineData || !cachedPartner) return false;
@@ -1187,7 +1292,9 @@ function NewOrderV2({
       onSent(result.orderId, draftId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha no envio.");
-      setShowConfirm(false);
+      const current = window.history.state as AppHistoryState | null;
+      if (current?.dialog === "send") window.history.back();
+      else setShowConfirm(false);
     } finally {
       setSending(false);
     }
@@ -1206,15 +1313,15 @@ function NewOrderV2({
       </header>
 
       <nav className="order-phase-nav" aria-label="Navegação do pedido">
-        <button className={phase === "header" ? "active" : ""} onClick={() => setPhase("header")}>
+        <button className={phase === "header" ? "active" : ""} onClick={() => goToPhase("header")}>
           <ClipboardList size={17} /><span><small>Pedido</small>Cabeçalho</span>
         </button>
         <ArrowRight className="phase-arrow" size={16} />
-        <button className={phase === "products" ? "active" : ""} disabled={!priceCode || !negotiation} onClick={() => setPhase("products")}>
+        <button className={phase === "products" ? "active" : ""} disabled={!priceCode || !negotiation} onClick={() => goToPhase("products")}>
           <ShoppingCart size={17} /><span><small>Seleção</small>Produtos</span>
         </button>
         <ArrowRight className="phase-arrow" size={16} />
-        <button className={phase === "review" ? "active" : ""} disabled={!cart.length} onClick={() => setPhase("review")}>
+        <button className={phase === "review" ? "active" : ""} disabled={!cart.length} onClick={() => goToPhase("review")}>
           <CheckCircle2 size={17} /><span><small>Finalização</small>Revisão</span>
         </button>
       </nav>
@@ -1289,8 +1396,8 @@ function NewOrderV2({
           <section className="form-section review-section">
             <div className="section-heading"><div><span className="eyebrow">Revisão</span><h2>Revise seu pedido</h2><p>Confira as condições e os itens antes de validar o envio.</p></div></div>
             <div className="review-grid">
-              <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => setPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Operação</dt><dd>TOP 5</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
-              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => setPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><span>{item.quantity}×</span><div><strong>{item.DESCRPROD}</strong><small>{money(Number(item.VLRVENDA))} / {item.CODVOL}</small></div><strong>{money(item.quantity * Number(item.VLRVENDA))}</strong></div>)}</article>
+              <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => goToPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Operação</dt><dd>TOP 5</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
+              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><span>{item.quantity}×</span><div><strong>{item.DESCRPROD}</strong><small>{money(Number(item.VLRVENDA))} / {item.CODVOL}</small></div><strong>{money(item.quantity * Number(item.VLRVENDA))}</strong></div>)}</article>
             </div>
             {observation && <div className="review-observation"><small>Observação</small><p>{observation}</p></div>}
             <div className="order-summary"><span><small>{totalUnits} {totalUnits === 1 ? "unidade" : "unidades"}</small><strong>Total do pedido</strong></span><strong>{money(total)}</strong></div>
@@ -1302,12 +1409,12 @@ function NewOrderV2({
       </div>
 
       <footer className="new-footer">
-        <button className="secondary" onClick={phase === "header" ? closeOrder : () => setPhase(phase === "review" ? "products" : "header")}>Voltar</button>
+        <button className="secondary" onClick={phase === "header" ? closeOrder : () => window.history.back()}>Voltar</button>
         <div className="footer-total">{phase !== "header" && <><small>{totalUnits} itens</small><strong>{money(total)}</strong></>}</div>
         <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length) || (phase === "review" && !online)} onClick={() => {
-          if (phase === "header") setPhase("products");
-          else if (phase === "products") setPhase("review");
-          else setShowConfirm(true);
+          if (phase === "header") goToPhase("products");
+          else if (phase === "products") goToPhase("review");
+          else openSendConfirmation();
         }}>
           {phase === "review"
             ? online
@@ -1320,12 +1427,12 @@ function NewOrderV2({
       {showConfirm && (
         <div className="modal-backdrop">
           <div className="confirm-modal">
-            <button className="modal-close" onClick={() => setShowConfirm(false)}><X size={20} /></button>
+            <button className="modal-close" onClick={() => window.history.back()}><X size={20} /></button>
             <span className="confirm-icon"><Send size={27} /></span>
             <h2>Enviar pedido ao Sankhya?</h2>
             <p>O cliente, a tabela, a negociação, os preços, o estoque e a TOP 5 serão validados novamente.</p>
             <div className="confirm-summary"><span><small>Cliente</small><strong>{partner.NOMEPARC}</strong></span><span><small>Total</small><strong>{money(total)}</strong></span></div>
-            <div className="modal-actions"><button className="secondary" onClick={() => setShowConfirm(false)}>Revisar</button><button className="primary" onClick={sendOrder} disabled={sending}>{sending ? <LoaderCircle className="spin" /> : <><Send size={18} /> Confirmar envio</>}</button></div>
+            <div className="modal-actions"><button className="secondary" onClick={() => window.history.back()}>Revisar</button><button className="primary" onClick={sendOrder} disabled={sending}>{sending ? <LoaderCircle className="spin" /> : <><Send size={18} /> Confirmar envio</>}</button></div>
           </div>
         </div>
       )}
