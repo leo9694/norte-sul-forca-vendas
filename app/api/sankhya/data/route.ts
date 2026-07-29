@@ -240,11 +240,12 @@ export async function GET(request: Request) {
         .slice(0, 100);
       const brand = safeSearch(url.searchParams.get("brand"));
       if (!partner || !priceCode) return Response.json({ error: "Selecione o cliente e a tabela." }, { status: 400 });
-      if (!productGroups.length) return Response.json({ rows: [] });
+      if (!productGroups.length && !brand) return Response.json({ rows: [] });
       const filter = search
         ? `AND (UPPER(P.DESCRPROD) LIKE '%${search}%' OR TO_CHAR(P.CODPROD) LIKE '%${search}%')`
         : "";
       const brandFilter = brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
+      const groupFilter = productGroups.length ? `AND P.CODGRUPOPROD IN (${productGroups.join(",")})` : "";
       const rows = await executeQuery(session, `
         WITH ESTOQUE AS (
           SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
@@ -281,7 +282,7 @@ export async function GET(request: Request) {
                            AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
            WHERE P.ATIVO = 'S'
              AND P.AD_MOBILIDADE = 'S'
-             AND P.CODGRUPOPROD IN (${productGroups.join(",")})
+             ${groupFilter}
              ${brandFilter}
              ${filter}
         )

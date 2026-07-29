@@ -106,7 +106,8 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   );
 
   assert.match(source, /function ClientPickerModal/);
-  assert.match(activeFlow, /Nenhum grupo selecionado/);
+  assert.match(activeFlow, /Selecione uma marca ou grupo/);
+  assert.match(activeFlow, />Aplicar</);
   assert.match(activeFlow, /Rascunho automático/);
   assert.match(activeFlow, /kind=productGroups/);
   assert.match(activeFlow, /Filtrar por grupo/);

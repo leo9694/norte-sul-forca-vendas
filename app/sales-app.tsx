@@ -1053,6 +1053,7 @@ function NewOrderV2({
   const [observation, setObservation] = useState(draft?.observation ?? "");
   const [cart, setCart] = useState<CartItem[]>(draft?.cart ?? []);
   const [brand, setBrand] = useState("");
+  const [pendingBrand, setPendingBrand] = useState("");
   const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
   const [pendingGroups, setPendingGroups] = useState<number[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<number[]>([]);
@@ -1106,6 +1107,7 @@ function NewOrderV2({
 
   const openBrandFilter = () => {
     const current = window.history.state as AppHistoryState | null;
+    setPendingBrand(brand);
     window.history.pushState(
       { ...(current ?? {}), norteSulVendas: true, view: "new", phase, dialog: "brand" } satisfies AppHistoryState,
       "",
@@ -1230,7 +1232,7 @@ function NewOrderV2({
     return (offlineData?.products ?? [])
       .filter((item) =>
         Number(item.CODTAB) === priceCode
-        && selectedGroups.includes(Number(item.CODGRUPOPROD))
+        && (!selectedGroups.length || selectedGroups.includes(Number(item.CODGRUPOPROD)))
         && (!brand || String(item.MARCA || "SEM MARCA").toUpperCase() === brand.toUpperCase())
         && (!term || `${item.DESCRPROD} ${item.CODPROD}`.toLowerCase().includes(term)),
       ) as Product[];
@@ -1303,7 +1305,7 @@ function NewOrderV2({
   }, [phase, priceCode, brand, partner.CODPARC, online, offlineData]);
 
   useEffect(() => {
-    if (phase !== "products" || !selectedGroups.length) {
+    if (phase !== "products" || (!selectedGroups.length && !brand)) {
       setProducts([]);
       return;
     }
@@ -1552,7 +1554,7 @@ function NewOrderV2({
               </span>
             </div>
             <div className="product-list">
-              {!selectedGroups.length ? <div className="empty-state product-filter-empty"><Filter size={22} /> Nenhum grupo selecionado</div> :
+              {!selectedGroups.length && !brand ? <div className="empty-state product-filter-empty"><Filter size={22} /> Selecione uma marca ou grupo</div> :
                 loadingProducts ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando tabela, estoque e mobilidade...</div> :
                   products.map((product) => (
                     <article key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}`} className={quantityOf(product) ? "selected" : ""}>
@@ -1564,7 +1566,7 @@ function NewOrderV2({
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
                     </article>
                   ))}
-              {selectedGroups.length > 0 && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado para os filtros selecionados.</div>}
+              {(selectedGroups.length > 0 || brand) && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado para os filtros selecionados.</div>}
             </div>
           </section>
         )}
@@ -1609,27 +1611,25 @@ function NewOrderV2({
               <button className="modal-close" onClick={closeBrandFilter}><X size={20} /></button>
             </header>
             <div className="brand-filter-list">
-              <button className={!brand ? "selected" : ""} onClick={() => {
-                setBrand("");
+              <button className={!pendingBrand ? "selected" : ""} onClick={() => setPendingBrand("")}>
+                <span>Todas as marcas</span>{!pendingBrand && <Check size={19} />}
+              </button>
+              {brands.map((item) => (
+                <button className={pendingBrand === item.MARCA ? "selected" : ""} key={item.MARCA} onClick={() => setPendingBrand(item.MARCA)}>
+                  <span>{item.MARCA}</span>{pendingBrand === item.MARCA && <Check size={19} />}
+                </button>
+              ))}
+            </div>
+            <footer>
+              <button className="secondary" onClick={closeBrandFilter}>Cancelar</button>
+              <button className="primary" onClick={() => {
+                setBrand(pendingBrand);
                 setSelectedGroups([]);
                 setPendingGroups([]);
                 setProducts([]);
                 closeBrandFilter();
-              }}>
-                <span>Todas as marcas</span>{!brand && <Check size={19} />}
-              </button>
-              {brands.map((item) => (
-                <button className={brand === item.MARCA ? "selected" : ""} key={item.MARCA} onClick={() => {
-                  setBrand(item.MARCA);
-                  setSelectedGroups([]);
-                  setPendingGroups([]);
-                  setProducts([]);
-                  closeBrandFilter();
-                }}>
-                  <span>{item.MARCA}</span>{brand === item.MARCA && <Check size={19} />}
-                </button>
-              ))}
-            </div>
+              }}>Aplicar</button>
+            </footer>
           </div>
         </div>
       )}

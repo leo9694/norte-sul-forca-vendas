@@ -452,13 +452,17 @@ textarea:focus { border-color: var(--green); }
 .brand-filter-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .brand-filter-modal h2 { margin: 5px 0 0; font-size: 24px; }
 .brand-filter-modal .modal-close { position: static; flex: 0 0 auto; }
-.brand-filter-list { overflow: auto; display: grid; gap: 7px; }
+.brand-filter-list { flex: 1; overflow: auto; display: grid; gap: 7px; }
 .brand-filter-list button {
   min-height: 50px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between;
   border: 1px solid var(--line); border-radius: 11px; background: white; color: var(--ink);
   font-size: 12px; font-weight: 700; text-align: left; cursor: pointer;
 }
 .brand-filter-list button:hover, .brand-filter-list button.selected { border-color: #8fc5a7; background: var(--green-soft); color: var(--green); }
+.brand-filter-modal > footer {
+  flex: 0 0 auto; display: grid; grid-template-columns: 1fr 1.35fr;
+  gap: 9px; padding-top: 16px; background: white;
+}
 .connection-dot { width: 11px; height: 11px; border-radius: 50%; box-shadow: 0 0 0 5px rgba(8,122,77,.09); }
 .connection-dot.online { background: var(--green); }
 .connection-dot.offline { background: #e78a1f; box-shadow: 0 0 0 5px rgba(231,138,31,.12); }
