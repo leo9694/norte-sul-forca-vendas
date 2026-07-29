@@ -42,7 +42,12 @@ export async function GET(request: Request) {
            ORDER BY C.NUNOTA DESC
         ) WHERE ROWNUM <= 500
       `);
-      return Response.json({ rows });
+      return Response.json({
+        rows,
+        user: session.user,
+        sellerId: session.sellerId,
+        sellerName: session.sellerName,
+      });
     }
 
     if (kind === "portfolio") {
@@ -89,47 +94,143 @@ export async function GET(request: Request) {
       return Response.json({ rows });
     }
 
+    if (kind === "orderOptions") {
+      const partner = numeric(url.searchParams.get("partner"));
+      if (!partner) return Response.json({ error: "Selecione um cliente." }, { status: 400 });
+
+      const partnerRows = await executeQuery(session, `
+        SELECT P.CODPARC, P.NOMEPARC, E.CODEMP, E.GRUPOICMS, E.CODTAB,
+               NVL((SELECT MAX(C.CODTIPVENDA) KEEP (DENSE_RANK LAST ORDER BY C.NUNOTA)
+                      FROM TGFCAB C
+                     WHERE C.CODPARC = P.CODPARC
+                       AND C.CODTIPOPER = 5
+                       AND C.CODVEND = ${session.sellerId}), 53) CODTIPVENDA
+          FROM TGFPAR P
+          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+         WHERE P.CODPARC = ${partner}
+           AND P.CODVEND = ${session.sellerId}
+           AND P.CLIENTE = 'S'
+           AND P.ATIVO = 'S'
+      `);
+      const partnerData = partnerRows[0];
+      if (!partnerData) return Response.json({ error: "Cliente fora da carteira ou sem cadastro na empresa 1." }, { status: 400 });
+
+      const groupIcms = partnerData.GRUPOICMS;
+      const groupFilter = groupIcms == null
+        ? "E.GRUPOICMS IS NULL"
+        : `E.GRUPOICMS = ${Number(groupIcms)}`;
+      const tables = await executeQuery(session, `
+        SELECT DISTINCT N.CODTAB, N.NOMETAB
+          FROM TGFPAEM E
+          JOIN TGFNTA N ON N.CODTAB = E.CODTAB
+         WHERE E.CODEMP = 1
+           AND ${groupFilter}
+           AND E.CODTAB IS NOT NULL
+           AND N.ATIVO = 'S'
+           AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
+         ORDER BY N.NOMETAB
+      `);
+      const negotiations = await executeQuery(session, `
+        SELECT V.CODTIPVENDA, V.DESCRTIPVENDA
+          FROM TGFTPV V
+         WHERE V.ATIVO = 'S'
+           AND V.CODTIPVENDA > 0
+           AND V.DHALTER = (
+             SELECT MAX(V2.DHALTER)
+               FROM TGFTPV V2
+              WHERE V2.CODTIPVENDA = V.CODTIPVENDA
+           )
+         ORDER BY V.DESCRTIPVENDA
+      `);
+      return Response.json({ partner: partnerData, tables, negotiations });
+    }
+
+    if (kind === "productGroups") {
+      const partner = numeric(url.searchParams.get("partner"));
+      const priceCode = numeric(url.searchParams.get("priceCode"));
+      if (!partner || !priceCode) {
+        return Response.json({ error: "Selecione o cliente e a tabela de preço." }, { status: 400 });
+      }
+      const rows = await executeQuery(session, `
+        SELECT DISTINCT G.CODGRUPOPROD, G.DESCRGRUPOPROD
+          FROM TGFGRU G
+          JOIN TGFPRO P ON P.CODGRUPOPROD = G.CODGRUPOPROD
+          JOIN TGFEXC X ON X.CODPROD = P.CODPROD
+          JOIN TGFTAB T ON T.NUTAB = X.NUTAB
+         WHERE T.CODTAB = ${priceCode}
+           AND T.NUTAB = (
+             SELECT MAX(T2.NUTAB)
+               FROM TGFTAB T2
+              WHERE T2.CODTAB = ${priceCode}
+                AND T2.DTVIGOR <= TRUNC(SYSDATE)
+           )
+           AND P.ATIVO = 'S'
+           AND P.AD_MOBILIDADE = 'S'
+           AND G.ATIVO = 'S'
+           AND G.ANALITICO = 'S'
+           AND EXISTS (
+             SELECT 1
+               FROM TGFPAR CL
+              WHERE CL.CODPARC = ${partner}
+                AND CL.CODVEND = ${session.sellerId}
+                AND CL.CLIENTE = 'S'
+                AND CL.ATIVO = 'S'
+           )
+         ORDER BY G.DESCRGRUPOPROD
+      `);
+      return Response.json({ rows });
+    }
+
     if (kind === "products") {
       const partner = numeric(url.searchParams.get("partner"));
-      if (!partner) return Response.json({ error: "Selecione um parceiro." }, { status: 400 });
+      const priceCode = numeric(url.searchParams.get("priceCode"));
+      const productGroup = numeric(url.searchParams.get("group"));
+      if (!partner || !priceCode) return Response.json({ error: "Selecione o cliente e a tabela." }, { status: 400 });
+      if (!productGroup) return Response.json({ rows: [] });
       const filter = search
         ? `AND (UPPER(P.DESCRPROD) LIKE '%${search}%' OR TO_CHAR(P.CODPROD) LIKE '%${search}%')`
         : "";
       const rows = await executeQuery(session, `
-        SELECT * FROM (
-          SELECT P.CODPROD, P.DESCRPROD, P.CODVOL,
+          SELECT P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD,
                  E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
-                 PA.GRUPOICMS, PA.CODTAB, T.NUTAB,
-                 NVL(X.VLRVENDA, 0) VLRVENDA
+                 T.CODTAB, T.NUTAB,
+                 MAX(NVL(X.VLRVENDA, 0)) VLRVENDA
             FROM TGFPRO P
             JOIN (
               SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
                      SUM(ESTOQUE - RESERVADO) DISPONIVEL
                 FROM TGFEST
                WHERE CODEMP = 1 AND ATIVO = 'S'
-               GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
+              GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
               HAVING SUM(ESTOQUE - RESERVADO) > 0
             ) E ON E.CODPROD = P.CODPROD
-            JOIN TGFPAEM PA ON PA.CODPARC = ${partner} AND PA.CODEMP = E.CODEMP
-            JOIN TGFTAB T ON T.CODTAB = PA.CODTAB
+            JOIN TGFTAB T ON T.CODTAB = ${priceCode}
                          AND T.NUTAB = (SELECT MAX(T2.NUTAB) FROM TGFTAB T2
-                                       WHERE T2.CODTAB = PA.CODTAB
+                                       WHERE T2.CODTAB = ${priceCode}
                                          AND T2.DTVIGOR <= TRUNC(SYSDATE))
-            LEFT JOIN TGFEXC X ON X.NUTAB = T.NUTAB AND X.CODPROD = P.CODPROD
+            JOIN TGFEXC X ON X.NUTAB = T.NUTAB AND X.CODPROD = P.CODPROD
                               AND (X.CODLOCAL = E.CODLOCAL OR X.CODLOCAL = 0)
-                              AND (X.CONTROLE = E.CONTROLE OR X.CONTROLE = ' ')
+                              AND (NVL(TRIM(X.CONTROLE), ' ') = NVL(TRIM(E.CONTROLE), ' ')
+                                   OR NVL(TRIM(X.CONTROLE), ' ') = ' ')
            WHERE P.ATIVO = 'S' AND P.AD_MOBILIDADE = 'S'
-                 AND NVL(X.VLRVENDA, 0) > 0
+                 AND P.CODGRUPOPROD = ${productGroup}
+                 AND X.VLRVENDA > 0
                  AND EXISTS (
-                   SELECT 1 FROM TGFPAR CL
-                    WHERE CL.CODPARC = ${partner}
+                   SELECT 1
+                     FROM TGFPAR CL
+                     JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
+                     JOIN TGFPAEM GE ON GE.CODEMP = PE.CODEMP
+                    WHERE GE.CODTAB = ${priceCode}
+                      AND (GE.GRUPOICMS = PE.GRUPOICMS OR (GE.GRUPOICMS IS NULL AND PE.GRUPOICMS IS NULL))
+                      AND CL.CODPARC = ${partner}
                       AND CL.CODVEND = ${session.sellerId}
                       AND CL.CLIENTE = 'S'
                       AND CL.ATIVO = 'S'
                  )
                  ${filter}
+           GROUP BY P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD,
+                    E.CODLOCAL, E.CONTROLE, E.DISPONIVEL, T.CODTAB, T.NUTAB
            ORDER BY P.DESCRPROD, E.DISPONIVEL DESC
-        ) WHERE ROWNUM <= 80
       `);
       return Response.json({ rows });
     }

@@ -44,8 +44,8 @@ type ApiRow = Record<string, string | number | null>;
 type Partner = ApiRow & {
   CODPARC: number;
   NOMEPARC: string;
-  CODTAB: number;
-  GRUPOICMS: number;
+  CODTAB?: number | null;
+  GRUPOICMS?: number | null;
 };
 type Product = ApiRow & {
   CODPROD: number;
@@ -58,6 +58,22 @@ type Product = ApiRow & {
   VLRVENDA: number;
 };
 type CartItem = Product & { quantity: number };
+type PriceTable = { CODTAB: number; NOMETAB: string };
+type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
+type ProductGroup = { CODGRUPOPROD: number; DESCRGRUPOPROD: string };
+type OrderPhase = "header" | "products" | "review";
+type OrderDraft = {
+  id: string;
+  updatedAt: number;
+  phase: OrderPhase;
+  partner: Partner;
+  priceCode: number;
+  priceName: string;
+  negotiation: number;
+  negotiationName: string;
+  observation: string;
+  cart: CartItem[];
+};
 type Client = ApiRow & {
   CODPARC: number;
   NOMEPARC: string;
@@ -88,11 +104,16 @@ export function SalesApp() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [user, setUser] = useState("Leonardo");
+  const [sellerId, setSellerId] = useState(0);
   const [screen, setScreen] = useState<"orders" | "new" | "clients">("orders");
   const [orders, setOrders] = useState<ApiRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
+  const [clientPickerOpen, setClientPickerOpen] = useState(false);
+  const [startingPartner, setStartingPartner] = useState<Partner | null>(null);
+  const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
+  const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [toast, setToast] = useState("");
 
   const loadOrders = async (dateFrom = "", dateTo = "") => {
@@ -101,8 +122,10 @@ export function SalesApp() {
       const params = new URLSearchParams({ kind: "orders" });
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
-      const result = await api<{ rows: ApiRow[] }>(`/api/sankhya/data?${params}`);
+      const result = await api<{ rows: ApiRow[]; user?: string; sellerId?: number }>(`/api/sankhya/data?${params}`);
       setOrders(result.rows);
+      if (result.user) setUser(result.user);
+      if (result.sellerId) setSellerId(Number(result.sellerId));
       setAuthenticated(true);
     } catch {
       setAuthenticated(false);
@@ -112,18 +135,58 @@ export function SalesApp() {
     }
   };
 
-  const showClients = async () => {
-    setScreen("clients");
-    if (clients.length || loadingClients) return;
+  const loadPortfolio = async () => {
+    if (clients.length) return clients;
     setLoadingClients(true);
     try {
       const result = await api<{ rows: Client[] }>("/api/sankhya/data?kind=portfolio");
       setClients(result.rows);
+      return result.rows;
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Não foi possível carregar a carteira.");
+      return [];
     } finally {
       setLoadingClients(false);
     }
+  };
+
+  const showClients = async () => {
+    setScreen("clients");
+    await loadPortfolio();
+  };
+
+  const openNewOrder = async () => {
+    setClientPickerOpen(true);
+    await loadPortfolio();
+  };
+
+  const draftKey = sellerId ? `norte-sul-vendas:drafts:${sellerId}` : "";
+
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      const stored = JSON.parse(localStorage.getItem(draftKey) || "[]") as OrderDraft[];
+      setDrafts(Array.isArray(stored) ? stored : []);
+    } catch {
+      setDrafts([]);
+    }
+  }, [draftKey]);
+
+  const saveDraft = (draft: OrderDraft) => {
+    setDrafts((current) => {
+      const next = [draft, ...current.filter((item) => item.id !== draft.id)]
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      if (draftKey) localStorage.setItem(draftKey, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const removeDraft = (id: string) => {
+    setDrafts((current) => {
+      const next = current.filter((draft) => draft.id !== id);
+      if (draftKey) localStorage.setItem(draftKey, JSON.stringify(next));
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -150,8 +213,9 @@ export function SalesApp() {
   if (!authenticated) {
     return (
       <LoginScreen
-        onLogin={(loginUser) => {
-          setUser(loginUser);
+        onLogin={(loginData) => {
+          setUser(loginData.user);
+          setSellerId(loginData.sellerId);
           setAuthenticated(true);
           loadOrders();
         }}
@@ -167,25 +231,54 @@ export function SalesApp() {
           <OrdersScreen
             orders={orders}
             loading={loadingOrders}
+            drafts={drafts}
             user={user}
-            onNew={() => setScreen("new")}
+            onNew={openNewOrder}
+            onResume={(draft) => {
+              setActiveDraft(draft);
+              setStartingPartner(draft.partner);
+              setScreen("new");
+            }}
             onPeriodChange={loadOrders}
             onLogout={logout}
           />
         ) : screen === "clients" ? (
           <ClientsScreen clients={clients} loading={loadingClients} user={user} onLogout={logout} />
         ) : (
-          <NewOrder
-            onBack={() => setScreen("orders")}
-            onSent={(id) => {
+          <NewOrderV2
+            partner={startingPartner!}
+            draft={activeDraft}
+            onSaveDraft={saveDraft}
+            onBack={() => {
+              setScreen("orders");
+              setActiveDraft(null);
+              setStartingPartner(null);
+            }}
+            onSent={(id, draftId) => {
+              removeDraft(draftId);
               setToast(`Pedido ${id || ""} enviado ao Sankhya com sucesso.`);
               setScreen("orders");
+              setActiveDraft(null);
+              setStartingPartner(null);
               loadOrders();
             }}
           />
         )}
       </main>
       {screen !== "new" && <MobileNav active={screen} onOrders={() => setScreen("orders")} onClients={showClients} />}
+      {clientPickerOpen && (
+        <ClientPickerModal
+          clients={clients}
+          loading={loadingClients}
+          onClose={() => setClientPickerOpen(false)}
+          onSelect={(client) => {
+            setStartingPartner(client);
+            setActiveDraft(null);
+            setClientPickerOpen(false);
+            setScreen("new");
+          }}
+        />
+      )}
       {toast && (
         <button className="toast" onClick={() => setToast("")}>
           <CheckCircle2 size={20} />
@@ -208,7 +301,7 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (user: string) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (data: { user: string; sellerId: number }) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -219,12 +312,12 @@ function LoginScreen({ onLogin }: { onLogin: (user: string) => void }) {
     setLoading(true);
     setError("");
     try {
-      const result = await api<{ user: string }>("/api/auth/login", {
+      const result = await api<{ user: string; sellerId: number }>("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      onLogin(result.user || username);
+      onLogin({ user: result.user || username, sellerId: Number(result.sellerId) });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao entrar.");
     } finally {
@@ -327,15 +420,19 @@ function DesktopSidebar({
 function OrdersScreen({
   orders,
   loading,
+  drafts,
   user,
   onNew,
+  onResume,
   onPeriodChange,
   onLogout,
 }: {
   orders: ApiRow[];
   loading: boolean;
+  drafts: OrderDraft[];
   user: string;
   onNew: () => void;
+  onResume: (draft: OrderDraft) => void;
   onPeriodChange: (dateFrom?: string, dateTo?: string) => void;
   onLogout: () => void;
 }) {
@@ -347,7 +444,11 @@ function OrdersScreen({
   const filtered = orders.filter((order) => {
     const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
     const state = order.STATUSNOTA === "L" ? "Enviados" : "Aguardando";
-    return matchesSearch && (filter === "Todos" || filter === state);
+    return matchesSearch && filter !== "Rascunhos" && (filter === "Todos" || filter === state);
+  });
+  const filteredDrafts = drafts.filter((draft) => {
+    const matchesSearch = `${draft.partner.NOMEPARC} ${draft.partner.CODPARC}`.toLowerCase().includes(query.toLowerCase());
+    return matchesSearch && (filter === "Todos" || filter === "Rascunhos");
   });
   const total = orders.reduce((sum, order) => sum + Number(order.VLRNOTA || 0), 0);
 
@@ -398,13 +499,22 @@ function OrdersScreen({
       <section className="metrics">
         <Metric icon={<CircleDollarSign />} label="Total em carteira" value={money(total)} />
         <Metric icon={<Send />} label="Enviados" value={String(orders.filter((o) => o.STATUSNOTA === "L").length)} />
-        <Metric blue icon={<FileText />} label="Rascunhos" value="0" />
+        <Metric blue icon={<FileText />} label="Rascunhos" value={String(drafts.length)} />
       </section>
 
       <section className="orders-section">
         <div className="section-heading"><div><span className="eyebrow">Movimentações</span><h2>Pedidos recentes</h2></div><button>Ver todos <ArrowRight size={17} /></button></div>
         <div className="order-table-head"><span>Cliente</span><span>Data</span><span>Valor</span><span>Status</span></div>
         <div className="order-list">
+          {filteredDrafts.map((draft) => (
+            <button className="order-card draft-card" key={draft.id} onClick={() => onResume(draft)}>
+              <span className="order-icon"><FileText /></span>
+              <div className="order-client"><strong>{draft.partner.NOMEPARC}</strong><small>Rascunho automático</small></div>
+              <div className="order-date"><small>{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</small></div>
+              <div className="order-total"><strong>{money(draft.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0))}</strong></div>
+              <span className="status draft"><FileText size={15} /> Continuar</span>
+            </button>
+          ))}
           {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando pedidos...</div> : filtered.map((order, index) => (
             <article className="order-card" key={String(order.NUNOTA)}>
               <span className="order-icon">{index % 2 ? <Leaf /> : <Building2 />}</span>
@@ -416,7 +526,7 @@ function OrdersScreen({
               </span>
             </article>
           ))}
-          {!loading && !filtered.length && <div className="empty-state">Nenhum pedido encontrado.</div>}
+          {!loading && !filtered.length && !filteredDrafts.length && <div className="empty-state">Nenhum pedido encontrado.</div>}
         </div>
       </section>
       <button className="mobile-fab" onClick={onNew}><Plus size={23} /> Novo pedido</button>
@@ -496,6 +606,321 @@ function ClientsScreen({
           {!loading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
         </div>
       </section>
+    </div>
+  );
+}
+
+function ClientPickerModal({
+  clients,
+  loading,
+  onClose,
+  onSelect,
+}: {
+  clients: Client[];
+  loading: boolean;
+  onClose: () => void;
+  onSelect: (client: Partner) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = clients.filter((client) =>
+    `${client.NOMEPARC} ${client.CODPARC} ${client.CGCCPF ?? ""}`.toLowerCase().includes(query.toLowerCase()),
+  );
+
+  return (
+    <div className="modal-backdrop client-picker-backdrop" role="dialog" aria-modal="true" aria-label="Selecionar cliente">
+      <section className="client-picker-modal">
+        <header>
+          <div><span className="eyebrow">Novo pedido</span><h2>Selecione o cliente</h2><p>Escolha um cliente da sua carteira para iniciar o pedido.</p></div>
+          <button className="modal-close" onClick={onClose} aria-label="Fechar"><X size={20} /></button>
+        </header>
+        <label className="search-box wide"><Search size={21} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por nome, código ou CPF/CNPJ" /></label>
+        <div className="client-picker-list">
+          {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando sua carteira...</div> : filtered.map((client) => (
+            <button key={client.CODPARC} onClick={() => onSelect(client)}>
+              <span className="client-avatar"><Building2 size={20} /></span>
+              <span><strong>{client.NOMEPARC}</strong><small>Cód. {client.CODPARC}{client.CGCCPF ? ` · ${client.CGCCPF}` : ""}</small></span>
+              <ArrowRight size={18} />
+            </button>
+          ))}
+          {!loading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na sua carteira.</div>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function NewOrderV2({
+  partner,
+  draft,
+  onSaveDraft,
+  onBack,
+  onSent,
+}: {
+  partner: Partner;
+  draft: OrderDraft | null;
+  onSaveDraft: (draft: OrderDraft) => void;
+  onBack: () => void;
+  onSent: (id: string | undefined, draftId: string) => void;
+}) {
+  const [draftId] = useState(() => draft?.id ?? `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const [phase, setPhase] = useState<OrderPhase>(draft?.phase ?? "header");
+  const [tables, setTables] = useState<PriceTable[]>([]);
+  const [negotiations, setNegotiations] = useState<Negotiation[]>([]);
+  const [groups, setGroups] = useState<ProductGroup[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [priceCode, setPriceCode] = useState(Number(draft?.priceCode || 0));
+  const [negotiation, setNegotiation] = useState(Number(draft?.negotiation || 0));
+  const [observation, setObservation] = useState(draft?.observation ?? "");
+  const [cart, setCart] = useState<CartItem[]>(draft?.cart ?? []);
+  const [productGroup, setProductGroup] = useState(0);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  const selectedTable = tables.find((table) => Number(table.CODTAB) === priceCode);
+  const selectedNegotiation = negotiations.find((item) => Number(item.CODTIPVENDA) === negotiation);
+  const total = useMemo(() => cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0), [cart]);
+  const totalUnits = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const currentDraft = (): OrderDraft => ({
+    id: draftId,
+    updatedAt: Date.now(),
+    phase,
+    partner,
+    priceCode,
+    priceName: selectedTable?.NOMETAB ?? draft?.priceName ?? "",
+    negotiation,
+    negotiationName: selectedNegotiation?.DESCRTIPVENDA ?? draft?.negotiationName ?? "",
+    observation,
+    cart,
+  });
+
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    api<{ partner: ApiRow; tables: PriceTable[]; negotiations: Negotiation[] }>(
+      `/api/sankhya/data?kind=orderOptions&partner=${partner.CODPARC}`,
+    )
+      .then((result) => {
+        setTables(result.tables);
+        setNegotiations(result.negotiations);
+        if (!priceCode) {
+          const preferred = result.tables.find((table) => Number(table.CODTAB) === Number(result.partner.CODTAB));
+          setPriceCode(Number(preferred?.CODTAB ?? result.tables[0]?.CODTAB ?? 0));
+        }
+        if (!negotiation) {
+          const preferred = result.negotiations.find((item) => Number(item.CODTIPVENDA) === Number(result.partner.CODTIPVENDA));
+          setNegotiation(Number(preferred?.CODTIPVENDA ?? result.negotiations[0]?.CODTIPVENDA ?? 0));
+        }
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [partner.CODPARC]);
+
+  useEffect(() => {
+    if (phase !== "products" || !priceCode) return;
+    api<{ rows: ProductGroup[] }>(
+      `/api/sankhya/data?kind=productGroups&partner=${partner.CODPARC}&priceCode=${priceCode}`,
+    )
+      .then((result) => setGroups(result.rows))
+      .catch((err) => setError(err.message));
+  }, [phase, priceCode, partner.CODPARC]);
+
+  useEffect(() => {
+    if (phase !== "products" || !productGroup) {
+      setProducts([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setLoadingProducts(true);
+      setError("");
+      const params = new URLSearchParams({
+        kind: "products",
+        partner: String(partner.CODPARC),
+        priceCode: String(priceCode),
+        group: String(productGroup),
+        q: search,
+      });
+      api<{ rows: Product[] }>(`/api/sankhya/data?${params}`)
+        .then((result) => setProducts(result.rows))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoadingProducts(false));
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [phase, productGroup, search, priceCode, partner.CODPARC]);
+
+  useEffect(() => {
+    onSaveDraft(currentDraft());
+  }, [phase, priceCode, negotiation, observation, cart]);
+
+  const setQuantity = (product: Product, change: number) => {
+    setCart((current) => {
+      const existing = current.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
+      const next = Math.max(0, Math.min(Number(product.DISPONIVEL), (existing?.quantity || 0) + change));
+      if (!next) return current.filter((item) => item !== existing);
+      if (existing) return current.map((item) => item === existing ? { ...item, quantity: next } : item);
+      return [...current, { ...product, quantity: next }];
+    });
+  };
+
+  const quantityOf = (product: Product) =>
+    cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL)?.quantity || 0;
+
+  const closeOrder = () => {
+    onSaveDraft(currentDraft());
+    onBack();
+  };
+
+  const sendOrder = async () => {
+    setSending(true);
+    setError("");
+    try {
+      const result = await api<{ orderId?: string }>("/api/sankhya/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partner: partner.CODPARC,
+          operation: 5,
+          negotiation,
+          priceCode,
+          observation,
+          items: cart.map((item) => ({
+            product: Number(item.CODPROD),
+            quantity: item.quantity,
+            unitPrice: Number(item.VLRVENDA),
+            volume: item.CODVOL,
+            location: Number(item.CODLOCAL),
+            control: item.CONTROLE,
+            priceTable: Number(item.NUTAB),
+          })),
+        }),
+      });
+      onSent(result.orderId, draftId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha no envio.");
+      setShowConfirm(false);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="page new-order-page">
+      <header className="new-header">
+        <button className="back-button" onClick={closeOrder}><ArrowLeft size={20} /></button>
+        <div><span className="eyebrow">Pedido de venda</span><h1>{draft ? "Continuar pedido" : "Novo pedido"}</h1></div>
+        <span className="draft-saved"><FileText size={15} /> Rascunho automático</span>
+        <span className="sync-badge"><CloudCheck size={16} /> Sankhya online</span>
+      </header>
+
+      <div className="new-content order-workspace">
+        {phase === "header" && (
+          <section className="form-section conditions">
+            <div className="section-heading"><div><span className="eyebrow">Cabeçalho do pedido</span><h2>Condições comerciais</h2><p>Escolha a tabela do Grupo de ICMS e o tipo de negociação.</p></div></div>
+            <div className="selected-client"><span className="client-avatar"><Building2 /></span><div><small>Cliente selecionado</small><strong>{partner.NOMEPARC}</strong><span>Cód. {partner.CODPARC}{partner.GRUPOICMS != null ? ` · Grupo ICMS ${partner.GRUPOICMS}` : ""}</span></div></div>
+            {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando condições do Sankhya...</div> : (
+              <div className="condition-grid">
+                <label>Empresa<div className="select-field"><Building2 size={19} /><span>1 — Norte Sul Sementes</span><LockKeyhole size={15} /></div></label>
+                <label>Tipo de operação<div className="select-field valid"><ClipboardList size={19} /><span>TOP 5 — Pedido de venda</span><CheckCircle2 size={16} /></div></label>
+                <label>Tabela de preço
+                  <select className="native-select" value={priceCode} onChange={(event) => {
+                    setPriceCode(Number(event.target.value));
+                    setProductGroup(0);
+                    setProducts([]);
+                    setCart([]);
+                  }}>
+                    <option value={0}>Selecione a tabela</option>
+                    {tables.map((table) => <option key={table.CODTAB} value={table.CODTAB}>{table.CODTAB} — {table.NOMETAB}</option>)}
+                  </select>
+                  <small>Tabelas ativas permitidas para o Grupo de ICMS do cliente.</small>
+                </label>
+                <label>Tipo de negociação
+                  <select className="native-select" value={negotiation} onChange={(event) => setNegotiation(Number(event.target.value))}>
+                    <option value={0}>Selecione a negociação</option>
+                    {negotiations.map((item) => <option key={item.CODTIPVENDA} value={item.CODTIPVENDA}>{item.CODTIPVENDA} — {item.DESCRTIPVENDA}</option>)}
+                  </select>
+                </label>
+                <label className="observation-field">Observação<textarea value={observation} onChange={(event) => setObservation(event.target.value)} placeholder="Informações adicionais do pedido" /></label>
+              </div>
+            )}
+            <div className="rule-card"><ShieldCheck size={22} /><div><strong>Regras do Sankhya aplicadas</strong><p>A carteira, o Grupo de ICMS, a tabela, a negociação e a TOP 5 serão revalidados antes do envio.</p></div></div>
+          </section>
+        )}
+
+        {phase === "products" && (
+          <section className="form-section products-section">
+            <div className="section-heading"><div><span className="eyebrow">Itens do pedido</span><h2>Adicionar produtos</h2><p>Selecione um grupo para consultar os produtos da tabela escolhida.</p></div><span className="table-tag">{selectedTable?.NOMETAB || `Tabela ${priceCode}`}</span></div>
+            <div className="product-filters">
+              <label>Grupo de produto
+                <select className="native-select" value={productGroup} onChange={(event) => setProductGroup(Number(event.target.value))}>
+                  <option value={0}>Selecione um grupo</option>
+                  {groups.map((group) => <option key={group.CODGRUPOPROD} value={group.CODGRUPOPROD}>{group.DESCRGRUPOPROD}</option>)}
+                </select>
+              </label>
+              <label>Buscar produto
+                <span className="search-box"><Search size={20} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome ou código" /></span>
+              </label>
+            </div>
+            <div className="product-list">
+              {!productGroup ? <div className="empty-state product-filter-empty"><Filter size={22} /> Nenhum filtro selecionado</div> :
+                loadingProducts ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando tabela, estoque e mobilidade...</div> :
+                  products.map((product) => (
+                    <article key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}`} className={quantityOf(product) ? "selected" : ""}>
+                      <span className="product-icon"><Sprout size={22} /></span>
+                      <div className="product-info"><strong>{product.DESCRPROD}</strong><small>Cód. {product.CODPROD} · {product.CODVOL}</small><span><PackageCheck size={14} /> {Number(product.DISPONIVEL).toLocaleString("pt-BR")} disponíveis</span></div>
+                      <div className="product-price"><strong>{money(Number(product.VLRVENDA))}</strong><small>por {product.CODVOL}</small></div>
+                      {quantityOf(product) ? (
+                        <div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div>
+                      ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
+                    </article>
+                  ))}
+              {productGroup > 0 && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado para este grupo e tabela.</div>}
+            </div>
+          </section>
+        )}
+
+        {phase === "review" && (
+          <section className="form-section review-section">
+            <div className="section-heading"><div><span className="eyebrow">Revisão</span><h2>Revise seu pedido</h2><p>Confira as condições e os itens antes de validar o envio.</p></div></div>
+            <div className="review-grid">
+              <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => setPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Operação</dt><dd>TOP 5</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
+              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => setPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><span>{item.quantity}×</span><div><strong>{item.DESCRPROD}</strong><small>{money(Number(item.VLRVENDA))} / {item.CODVOL}</small></div><strong>{money(item.quantity * Number(item.VLRVENDA))}</strong></div>)}</article>
+            </div>
+            {observation && <div className="review-observation"><small>Observação</small><p>{observation}</p></div>}
+            <div className="order-summary"><span><small>{totalUnits} {totalUnits === 1 ? "unidade" : "unidades"}</small><strong>Total do pedido</strong></span><strong>{money(total)}</strong></div>
+            <div className="validation-strip"><span><CheckCircle2 /> Cliente e ICMS</span><span><CheckCircle2 /> Tabela vigente</span><span><CheckCircle2 /> Estoque e mobilidade</span><span><CheckCircle2 /> Negociação ativa</span></div>
+          </section>
+        )}
+        {error && <div className="global-error">{error}</div>}
+      </div>
+
+      <footer className="new-footer">
+        <button className="secondary" onClick={phase === "header" ? closeOrder : () => setPhase(phase === "review" ? "products" : "header")}>Voltar</button>
+        <div className="footer-total">{phase !== "header" && <><small>{totalUnits} itens</small><strong>{money(total)}</strong></>}</div>
+        <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length)} onClick={() => {
+          if (phase === "header") setPhase("products");
+          else if (phase === "products") setPhase("review");
+          else setShowConfirm(true);
+        }}>
+          {phase === "review" ? <><ShieldCheck size={18} /> Validar e enviar</> : <>Continuar <ArrowRight size={18} /></>}
+        </button>
+      </footer>
+
+      {showConfirm && (
+        <div className="modal-backdrop">
+          <div className="confirm-modal">
+            <button className="modal-close" onClick={() => setShowConfirm(false)}><X size={20} /></button>
+            <span className="confirm-icon"><Send size={27} /></span>
+            <h2>Enviar pedido ao Sankhya?</h2>
+            <p>O cliente, a tabela, a negociação, os preços, o estoque e a TOP 5 serão validados novamente.</p>
+            <div className="confirm-summary"><span><small>Cliente</small><strong>{partner.NOMEPARC}</strong></span><span><small>Total</small><strong>{money(total)}</strong></span></div>
+            <div className="modal-actions"><button className="secondary" onClick={() => setShowConfirm(false)}>Revisar</button><button className="primary" onClick={sendOrder} disabled={sending}>{sending ? <LoaderCircle className="spin" /> : <><Send size={18} /> Confirmar envio</>}</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

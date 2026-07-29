@@ -66,3 +66,17 @@ test("ships installable PWA files with the current cache policy", async () => {
   assert.doesNotMatch(serviceWorker, /const SHELL = \[[^\]]*["']\/["']/);
   assert.match(serviceWorker, /response\.ok/);
 });
+
+test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {
+  const source = await readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8");
+  const activeFlow = source.slice(
+    source.indexOf("function NewOrderV2"),
+    source.indexOf("function NewOrder(", source.indexOf("function NewOrderV2")),
+  );
+
+  assert.match(source, /function ClientPickerModal/);
+  assert.match(activeFlow, /Nenhum filtro selecionado/);
+  assert.match(activeFlow, /Rascunho automático/);
+  assert.match(activeFlow, /kind=productGroups/);
+  assert.doesNotMatch(activeFlow, /className="stepper"/);
+});

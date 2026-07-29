@@ -16,28 +16,29 @@ export async function POST(request: Request) {
     const body = await request.json() as {
       partner?: number;
       operation?: number;
+      negotiation?: number;
+      priceCode?: number;
       items?: OrderItem[];
       observation?: string;
       dryRun?: boolean;
     };
     const partner = Number(body.partner);
     const operation = Number(body.operation);
+    const negotiation = Number(body.negotiation);
+    const priceCode = Number(body.priceCode);
     const items = body.items ?? [];
 
     if (!Number.isInteger(partner) || partner <= 0) throw new Error("Parceiro inválido.");
     if (operation !== 5) throw new Error("Nesta versão, somente a TOP 5 é permitida.");
+    if (!Number.isInteger(negotiation) || negotiation <= 0) throw new Error("Selecione o tipo de negociação.");
+    if (!Number.isInteger(priceCode) || priceCode <= 0) throw new Error("Selecione a tabela de preço.");
     if (!items.length) throw new Error("Inclua ao menos um produto.");
     if (items.some((item) => !Number.isInteger(item.product) || item.quantity <= 0)) {
       throw new Error("Há itens com quantidade inválida.");
     }
 
     const partnerRows = await executeQuery(session, `
-      SELECT P.CODPARC, P.CODVEND, E.CODEMP, E.GRUPOICMS, E.CODTAB,
-             NVL((SELECT MAX(C.CODTIPVENDA) KEEP (DENSE_RANK LAST ORDER BY C.NUNOTA)
-                   FROM TGFCAB C
-                   WHERE C.CODPARC = P.CODPARC
-                     AND C.CODTIPOPER = 5
-                     AND C.CODVEND = ${session.sellerId}), 53) CODTIPVENDA
+      SELECT P.CODPARC, P.CODVEND, E.CODEMP, E.GRUPOICMS, E.CODTAB
         FROM TGFPAR P
         JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
        WHERE P.CODPARC = ${partner}
@@ -46,31 +47,92 @@ export async function POST(request: Request) {
          AND P.CODVEND = ${session.sellerId}
     `);
     const partnerData = partnerRows[0] as Record<string, unknown> | undefined;
-    if (!partnerData?.CODTAB) throw new Error("Parceiro sem tabela no Grupo de ICMS da empresa 1.");
+    if (!partnerData) throw new Error("Cliente fora da carteira ou sem cadastro na empresa 1.");
 
-    const codtab = Number(partnerData.CODTAB);
+    const groupFilter = partnerData.GRUPOICMS == null
+      ? "E.GRUPOICMS IS NULL"
+      : `E.GRUPOICMS = ${Number(partnerData.GRUPOICMS)}`;
+    const allowedTables = await executeQuery(session, `
+      SELECT DISTINCT N.CODTAB
+        FROM TGFPAEM E
+        JOIN TGFNTA N ON N.CODTAB = E.CODTAB
+       WHERE E.CODEMP = 1
+         AND ${groupFilter}
+         AND E.CODTAB = ${priceCode}
+         AND N.ATIVO = 'S'
+         AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
+    `);
+    if (!allowedTables.length) throw new Error("Tabela não permitida para o Grupo de ICMS do cliente.");
+
+    const validNegotiations = await executeQuery(session, `
+      SELECT V.CODTIPVENDA
+        FROM TGFTPV V
+       WHERE V.CODTIPVENDA = ${negotiation}
+         AND V.ATIVO = 'S'
+         AND V.DHALTER = (
+           SELECT MAX(V2.DHALTER)
+             FROM TGFTPV V2
+            WHERE V2.CODTIPVENDA = V.CODTIPVENDA
+         )
+    `);
+    if (!validNegotiations.length) throw new Error("Tipo de negociação inválido ou inativo.");
+
     const productCodes = items.map((item) => item.product).join(",");
     const validRows = await executeQuery(session, `
-      SELECT P.CODPROD,
+      SELECT P.CODPROD, E.CODLOCAL, E.CONTROLE,
              SUM(E.ESTOQUE - E.RESERVADO) DISPONIVEL,
-             MAX(T.NUTAB) NUTAB
+             MAX(T.NUTAB) NUTAB,
+             MAX(PX.VLRVENDA) VLRVENDA
         FROM TGFPRO P
         JOIN TGFEST E ON E.CODPROD = P.CODPROD AND E.CODEMP = 1 AND E.ATIVO = 'S'
-        JOIN TGFTAB T ON T.CODTAB = ${codtab} AND T.DTVIGOR <= TRUNC(SYSDATE)
+        JOIN TGFTAB T ON T.CODTAB = ${priceCode}
+                     AND T.NUTAB = (
+                       SELECT MAX(T2.NUTAB)
+                         FROM TGFTAB T2
+                        WHERE T2.CODTAB = ${priceCode}
+                          AND T2.DTVIGOR <= TRUNC(SYSDATE)
+                     )
+        JOIN (
+          SELECT X.CODPROD, MAX(X.VLRVENDA) VLRVENDA
+            FROM TGFEXC X
+           WHERE X.NUTAB = (
+             SELECT MAX(T3.NUTAB)
+               FROM TGFTAB T3
+              WHERE T3.CODTAB = ${priceCode}
+                AND T3.DTVIGOR <= TRUNC(SYSDATE)
+           )
+             AND X.VLRVENDA > 0
+           GROUP BY X.CODPROD
+        ) PX ON PX.CODPROD = P.CODPROD
        WHERE P.CODPROD IN (${productCodes})
          AND P.ATIVO = 'S' AND P.AD_MOBILIDADE = 'S'
-       GROUP BY P.CODPROD
+         AND EXISTS (
+           SELECT 1
+             FROM TGFEXC X
+            WHERE X.NUTAB = T.NUTAB
+              AND X.CODPROD = P.CODPROD
+              AND X.VLRVENDA > 0
+         )
+       GROUP BY P.CODPROD, E.CODLOCAL, E.CONTROLE
       HAVING SUM(E.ESTOQUE - E.RESERVADO) > 0
     `);
-    const validMap = new Map(validRows.map((row) => [Number(row.CODPROD), row]));
+    const itemKey = (product: number, location: number, control: unknown) =>
+      `${product}|${location}|${String(control ?? "").trim()}`;
+    const validMap = new Map(validRows.map((row) => [
+      itemKey(Number(row.CODPROD), Number(row.CODLOCAL), row.CONTROLE),
+      row,
+    ]));
     for (const item of items) {
-      const current = validMap.get(item.product);
+      const current = validMap.get(itemKey(item.product, item.location, item.control));
       if (!current) throw new Error(`Produto ${item.product} indisponível ou não habilitado para mobilidade.`);
       if (item.quantity > Number(current.DISPONIVEL)) {
         throw new Error(`Estoque insuficiente para o produto ${item.product}.`);
       }
       if (item.priceTable !== Number(current.NUTAB)) {
         throw new Error(`A tabela do produto ${item.product} mudou. Atualize o pedido.`);
+      }
+      if (Math.abs(item.unitPrice - Number(current.VLRVENDA)) > 0.005) {
+        throw new Error(`O preço do produto ${item.product} mudou. Atualize o pedido.`);
       }
     }
 
@@ -90,7 +152,7 @@ export async function POST(request: Request) {
           CODEMP: { $: String(partnerData.CODEMP) },
           CODPARC: { $: String(partner) },
           CODTIPOPER: { $: "5" },
-          CODTIPVENDA: { $: String(partnerData.CODTIPVENDA || 53) },
+          CODTIPVENDA: { $: String(negotiation) },
           CODVEND: { $: String(session.sellerId) },
           CODNAT: { $: "0" },
           CODCENCUS: { $: "0" },
@@ -123,8 +185,8 @@ export async function POST(request: Request) {
           operation,
           company: Number(partnerData.CODEMP),
           groupIcms: Number(partnerData.GRUPOICMS || 0),
-          priceCode: codtab,
-          negotiation: Number(partnerData.CODTIPVENDA || 53),
+          priceCode,
+          negotiation,
           seller: session.sellerId,
           products: items.length,
           status: "ready",
