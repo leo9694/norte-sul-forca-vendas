@@ -27,6 +27,7 @@
 npm-debug.log*
 dev-server*.log
 start-test*.log
+start-*.log
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*

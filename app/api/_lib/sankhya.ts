@@ -4,6 +4,16 @@ const encoder = new TextEncoder();
 export type SankhyaSession = {
   jsessionid: string;
   user: string;
+  userId: number;
+  sellerId: number;
+  sellerName: string;
+  expiresAt: number;
+};
+
+type AuthenticatedSankhyaSession = {
+  jsessionid: string;
+  user: string;
+  userId: number;
   expiresAt: number;
 };
 
@@ -104,13 +114,23 @@ export async function loginSankhya(username: string, password: string) {
   const result = await parseSankhyaJson<{
     status: string;
     statusMessage?: string;
-    responseBody?: { jsessionid?: { $?: string } };
+    responseBody?: {
+      jsessionid?: { $?: string };
+      idusu?: { $?: string };
+    };
   }>(response);
   const jsessionid = result.responseBody?.jsessionid?.$;
-  if (!response.ok || result.status !== "1" || !jsessionid) {
+  const encodedUserId = result.responseBody?.idusu?.$?.replace(/\s/g, "");
+  const userId = encodedUserId ? Number(atob(encodedUserId)) : 0;
+  if (!response.ok || result.status !== "1" || !jsessionid || !Number.isInteger(userId) || userId <= 0) {
     throw new Error(result.statusMessage || "Usuário ou senha inválidos.");
   }
-  return { jsessionid, user: username, expiresAt: Date.now() + 8 * 60 * 60 * 1000 };
+  return {
+    jsessionid,
+    user: username,
+    userId,
+    expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+  };
 }
 
 export async function callSankhya(
@@ -150,8 +170,56 @@ export async function executeQuery(session: SankhyaSession, sql: string) {
   );
 }
 
+export async function createApplicationSession(username: string, password: string) {
+  const authenticatedUser = await loginSankhya(username, password);
+  let technicalSession: AuthenticatedSankhyaSession | null = null;
+  try {
+    technicalSession = await loginSankhya(
+      env("SANKHYA_ACCESS_USER"),
+      env("SANKHYA_ACCESS_PASSWORD"),
+    );
+    const rows = await executeQuery(technicalSession as SankhyaSession, `
+      SELECT U.CODUSU, U.NOMEUSU, U.NOMEUSUCPLT, U.CODVEND,
+             V.APELIDO, V.ATIVO
+        FROM TSIUSU U
+        LEFT JOIN TGFVEN V ON V.CODVEND = U.CODVEND
+       WHERE U.CODUSU = ${authenticatedUser.userId}
+    `);
+    const userData = rows[0] as Record<string, unknown> | undefined;
+    const sellerId = Number(userData?.CODVEND || 0);
+    if (!userData || !Number.isInteger(sellerId) || sellerId <= 0) {
+      throw new Error("Seu usuário não possui um vendedor vinculado no cadastro do Sankhya.");
+    }
+    if (String(userData.ATIVO || "N") !== "S") {
+      throw new Error("O vendedor vinculado ao seu usuário está inativo no Sankhya.");
+    }
+    return {
+      jsessionid: technicalSession.jsessionid,
+      user: String(userData.NOMEUSUCPLT || userData.NOMEUSU || username),
+      userId: authenticatedUser.userId,
+      sellerId,
+      sellerName: String(userData.APELIDO || userData.NOMEUSU || username),
+      expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+    } satisfies SankhyaSession;
+  } finally {
+    await callSankhya(
+      authenticatedUser as SankhyaSession,
+      "mge",
+      "MobileLoginSP.logout",
+      {},
+    ).catch(() => null);
+  }
+}
+
 export async function requireSession(request: Request) {
   const session = await decodeSession(readSessionCookie(request));
-  if (!session) throw new Error("AUTH_REQUIRED");
+  if (
+    !session ||
+    !Number.isInteger(session.userId) ||
+    !Number.isInteger(session.sellerId) ||
+    session.sellerId <= 0
+  ) {
+    throw new Error("AUTH_REQUIRED");
+  }
   return session;
 }

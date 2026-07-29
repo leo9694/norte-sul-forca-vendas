@@ -34,11 +34,16 @@ export async function POST(request: Request) {
     const partnerRows = await executeQuery(session, `
       SELECT P.CODPARC, P.CODVEND, E.CODEMP, E.GRUPOICMS, E.CODTAB,
              NVL((SELECT MAX(C.CODTIPVENDA) KEEP (DENSE_RANK LAST ORDER BY C.NUNOTA)
-                    FROM TGFCAB C
-                   WHERE C.CODPARC = P.CODPARC AND C.CODTIPOPER = 5), 53) CODTIPVENDA
+                   FROM TGFCAB C
+                   WHERE C.CODPARC = P.CODPARC
+                     AND C.CODTIPOPER = 5
+                     AND C.CODVEND = ${session.sellerId}), 53) CODTIPVENDA
         FROM TGFPAR P
         JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
-       WHERE P.CODPARC = ${partner} AND P.CLIENTE = 'S' AND P.ATIVO = 'S'
+       WHERE P.CODPARC = ${partner}
+         AND P.CLIENTE = 'S'
+         AND P.ATIVO = 'S'
+         AND P.CODVEND = ${session.sellerId}
     `);
     const partnerData = partnerRows[0] as Record<string, unknown> | undefined;
     if (!partnerData?.CODTAB) throw new Error("Parceiro sem tabela no Grupo de ICMS da empresa 1.");
@@ -86,7 +91,7 @@ export async function POST(request: Request) {
           CODPARC: { $: String(partner) },
           CODTIPOPER: { $: "5" },
           CODTIPVENDA: { $: String(partnerData.CODTIPVENDA || 53) },
-          CODVEND: { $: String(partnerData.CODVEND || 0) },
+          CODVEND: { $: String(session.sellerId) },
           CODNAT: { $: "0" },
           CODCENCUS: { $: "0" },
           CODPROJ: { $: "0" },
@@ -120,7 +125,7 @@ export async function POST(request: Request) {
           groupIcms: Number(partnerData.GRUPOICMS || 0),
           priceCode: codtab,
           negotiation: Number(partnerData.CODTIPVENDA || 53),
-          seller: Number(partnerData.CODVEND || 0),
+          seller: session.sellerId,
           products: items.length,
           status: "ready",
         },

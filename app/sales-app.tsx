@@ -185,12 +185,12 @@ function LoginScreen({ onLogin }: { onLogin: (user: string) => void }) {
     setLoading(true);
     setError("");
     try {
-      await api("/api/auth/login", {
+      const result = await api<{ user: string }>("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      onLogin(username);
+      onLogin(result.user || username);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao entrar.");
     } finally {

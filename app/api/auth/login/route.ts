@@ -1,6 +1,6 @@
 import {
+  createApplicationSession,
   encodeSession,
-  loginSankhya,
   sessionCookieHeader,
 } from "../../_lib/sankhya";
 
@@ -13,10 +13,15 @@ export async function POST(request: Request) {
     if (!username?.trim() || !password) {
       return Response.json({ error: "Informe usuário e senha." }, { status: 400 });
     }
-    const session = await loginSankhya(username.trim(), password);
+    const session = await createApplicationSession(username.trim(), password);
     const encoded = await encodeSession(session);
     return Response.json(
-      { ok: true, user: session.user },
+      {
+        ok: true,
+        user: session.user,
+        sellerId: session.sellerId,
+        sellerName: session.sellerName,
+      },
       { headers: { "Set-Cookie": sessionCookieHeader(encoded) } },
     );
   } catch (error) {

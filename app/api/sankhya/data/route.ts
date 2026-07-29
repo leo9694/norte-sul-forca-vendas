@@ -20,9 +20,10 @@ export async function GET(request: Request) {
         SELECT * FROM (
           SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.VLRNOTA, C.STATUSNOTA,
                  C.PENDENTE, C.CODPARC, P.NOMEPARC
-            FROM TGFCAB C
+           FROM TGFCAB C
             JOIN TGFPAR P ON P.CODPARC = C.CODPARC
            WHERE C.CODTIPOPER = 5 AND C.TIPMOV = 'P'
+             AND C.CODVEND = ${session.sellerId}
            ORDER BY C.NUNOTA DESC
         ) WHERE ROWNUM <= 30
       `);
@@ -40,6 +41,7 @@ export async function GET(request: Request) {
             FROM TGFPAR P
             JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
            WHERE P.CLIENTE = 'S' AND P.ATIVO = 'S' AND E.CODTAB IS NOT NULL
+             AND P.CODVEND = ${session.sellerId}
                  ${filter}
            ORDER BY P.NOMEPARC
         ) WHERE ROWNUM <= 50
@@ -88,6 +90,13 @@ export async function GET(request: Request) {
                               AND (X.CONTROLE = E.CONTROLE OR X.CONTROLE = ' ')
            WHERE P.ATIVO = 'S' AND P.AD_MOBILIDADE = 'S'
                  AND NVL(X.VLRVENDA, 0) > 0
+                 AND EXISTS (
+                   SELECT 1 FROM TGFPAR CL
+                    WHERE CL.CODPARC = ${partner}
+                      AND CL.CODVEND = ${session.sellerId}
+                      AND CL.CLIENTE = 'S'
+                      AND CL.ATIVO = 'S'
+                 )
                  ${filter}
            ORDER BY P.DESCRPROD, E.DISPONIVEL DESC
         ) WHERE ROWNUM <= 80
