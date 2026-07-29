@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node --env-file=.env.treinamento node_modules/vinext/dist/cli.js dev",
     "build": "node node_modules/vinext/dist/cli.js build",
-    "start": "node --env-file=.env.treinamento node_modules/vinext/dist/cli.js start",
+    "start": "node --env-file=.env.treinamento scripts/start-local.mjs",
     "rebuild": "npm run build",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
