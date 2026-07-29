@@ -1,5 +1,11 @@
-const CACHE = "norte-sul-vendas-v3";
-const SHELL = ["/manifest.webmanifest", "/app-icon.svg"];
+const CACHE = "norte-sul-vendas-v4";
+const SHELL = [
+  "/manifest.webmanifest",
+  "/app-icon-192.png",
+  "/app-icon-512.png",
+  "/app-icon-maskable-512.png",
+  "/apple-touch-icon.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {

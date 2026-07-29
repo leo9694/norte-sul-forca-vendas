@@ -19,8 +19,16 @@ export async function generateMetadata(): Promise<Metadata> {
     description: "Força de vendas integrada ao Sankhya",
     manifest: "/manifest.webmanifest",
     icons: {
-      icon: "/app-icon.svg",
-      apple: "/app-icon.svg",
+      icon: [
+        { url: "/app-icon-192.png", sizes: "192x192", type: "image/png" },
+        { url: "/app-icon-512.png", sizes: "512x512", type: "image/png" },
+      ],
+      apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    },
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "default",
+      title: "NS Vendas",
     },
     openGraph: {
       title: "Norte Sul Vendas",

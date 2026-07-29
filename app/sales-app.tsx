@@ -15,6 +15,7 @@ import {
   CloudCheck,
   CloudOff,
   Database,
+  Download,
   FileText,
   Filter,
   Home,
@@ -86,6 +87,11 @@ type OrderDraft = {
 };
 
 const OFFLINE_SESSION_KEY = "norte-sul-vendas:offline-session-enabled";
+
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 type Client = ApiRow & {
   CODPARC: number;
   NOMEPARC: string;
@@ -136,6 +142,10 @@ export function SalesApp() {
   const [offlineData, setOfflineData] = useState<OfflineSnapshot | null>(null);
   const [online, setOnline] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [installed, setInstalled] = useState(false);
+  const [iosDevice, setIosDevice] = useState(false);
+  const [secureContext, setSecureContext] = useState(true);
   const [clientPickerOpen, setClientPickerOpen] = useState(false);
   const [startingPartner, setStartingPartner] = useState<Partner | null>(null);
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
@@ -213,6 +223,14 @@ export function SalesApp() {
     }
   };
 
+  const installApplication = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") setToast("Aplicativo instalado com sucesso.");
+    setInstallPrompt(null);
+  };
+
   const loadPortfolio = async () => {
     if (clients.length) return clients;
     setLoadingClients(true);
@@ -276,9 +294,24 @@ export function SalesApp() {
 
   useEffect(() => {
     const updateConnection = () => setOnline(navigator.onLine);
+    const standalone = window.matchMedia("(display-mode: standalone)").matches
+      || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    setInstalled(standalone);
+    setIosDevice(/iphone|ipad|ipod/i.test(navigator.userAgent));
+    setSecureContext(window.isSecureContext);
+    const captureInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    const markInstalled = () => {
+      setInstalled(true);
+      setInstallPrompt(null);
+    };
     updateConnection();
     window.addEventListener("online", updateConnection);
     window.addEventListener("offline", updateConnection);
+    window.addEventListener("beforeinstallprompt", captureInstallPrompt);
+    window.addEventListener("appinstalled", markInstalled);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => null);
     navigator.storage?.persist?.().catch(() => false);
 
@@ -306,6 +339,8 @@ export function SalesApp() {
     return () => {
       window.removeEventListener("online", updateConnection);
       window.removeEventListener("offline", updateConnection);
+      window.removeEventListener("beforeinstallprompt", captureInstallPrompt);
+      window.removeEventListener("appinstalled", markInstalled);
     };
   }, []);
 
@@ -370,6 +405,11 @@ export function SalesApp() {
             online={online}
             syncing={syncing}
             snapshot={offlineData}
+            canInstall={Boolean(installPrompt)}
+            installed={installed}
+            iosDevice={iosDevice}
+            secureContext={secureContext}
+            onInstall={() => void installApplication()}
             onLoad={() => void makeLoad()}
             onLogout={logout}
           />
@@ -755,6 +795,11 @@ function MoreScreen({
   online,
   syncing,
   snapshot,
+  canInstall,
+  installed,
+  iosDevice,
+  secureContext,
+  onInstall,
   onLoad,
   onLogout,
 }: {
@@ -764,6 +809,11 @@ function MoreScreen({
   online: boolean;
   syncing: boolean;
   snapshot: OfflineSnapshot | null;
+  canInstall: boolean;
+  installed: boolean;
+  iosDevice: boolean;
+  secureContext: boolean;
+  onInstall: () => void;
   onLoad: () => void;
   onLogout: () => void;
 }) {
@@ -811,6 +861,28 @@ function MoreScreen({
         <button className="primary load-button" onClick={onLoad} disabled={!online || syncing}>
           {syncing ? <><LoaderCircle className="spin" size={19} /> Atualizando...</> : <><RefreshCw size={19} /> Fazer carga</>}
         </button>
+      </section>
+
+      <section className={`install-card ${!secureContext ? "warning" : ""}`}>
+        <div className="load-card-icon"><Download size={25} /></div>
+        <div className="load-card-copy">
+          <span className="eyebrow">Aplicativo móvel</span>
+          <h2>{installed ? "Aplicativo instalado" : "Instalar aplicativo"}</h2>
+          {installed ? (
+            <p>Esta versão já está sendo executada como aplicativo no aparelho.</p>
+          ) : !secureContext ? (
+            <p>A instalação real exige um endereço HTTPS. Em endereço local HTTP, o navegador consegue criar somente um atalho.</p>
+          ) : iosDevice ? (
+            <p>No iPhone, toque em Compartilhar e depois em “Adicionar à Tela de Início”.</p>
+          ) : canInstall ? (
+            <p>Instale a versão completa para abrir sem a barra do navegador e trabalhar offline.</p>
+          ) : (
+            <p>Abra esta tela novamente após a primeira carga. O navegador liberará a instalação quando terminar de preparar o app.</p>
+          )}
+        </div>
+        {canInstall && !installed && (
+          <button className="primary load-button" onClick={onInstall}><Download size={19} /> Instalar aplicativo</button>
+        )}
       </section>
 
       <section className="offline-summary">

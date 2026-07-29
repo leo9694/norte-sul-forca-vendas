@@ -62,7 +62,11 @@ test("ships installable PWA files with the current cache policy", async () => {
 
   assert.match(manifest, /"display"\s*:\s*"standalone"/);
   assert.match(manifest, /Norte Sul/);
-  assert.match(serviceWorker, /norte-sul-vendas-v3/);
+  assert.match(serviceWorker, /norte-sul-vendas-v4/);
+  assert.match(manifest, /app-icon-192\.png/);
+  assert.match(manifest, /app-icon-512\.png/);
+  assert.match(manifest, /app-icon-maskable-512\.png/);
+  assert.match(manifest, /"scope"\s*:\s*"\/"/);
   assert.match(serviceWorker, /cache\.put\(["']\/["']/);
   assert.match(serviceWorker, /html\.matchAll/);
   assert.match(serviceWorker, /cache\.addAll/);
@@ -82,6 +86,8 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(appSource, /function MoreScreen/);
   assert.match(appSource, />Fazer carga</);
   assert.match(appSource, /Aguardando internet/);
+  assert.match(appSource, /beforeinstallprompt/);
+  assert.match(appSource, /Instalar aplicativo/);
 });
 
 test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {
