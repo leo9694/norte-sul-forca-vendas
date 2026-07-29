@@ -84,17 +84,35 @@ export function readSessionCookie(request: Request) {
     ?.slice(SESSION_COOKIE.length + 1);
 }
 
-function omUrl(module: "mge" | "mgecom", serviceName: string) {
+function omUrl(module: "mge" | "mgecom", serviceName: string, sessionId?: string) {
   const configured = env("SANKHYA_OM_BASE_URL");
   const base = configured.replace(/\/mge\/?$/, "/");
-  return `${base}${module}/service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json`;
+  const session = sessionId ? `&mgeSession=${encodeURIComponent(sessionId)}` : "";
+  return `${base}${module}/service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json${session}`;
 }
 
 async function parseSankhyaJson<T>(response: Response) {
   const bytes = await response.arrayBuffer();
   let text = new TextDecoder("utf-8").decode(bytes);
   if (text.includes("�")) text = new TextDecoder("windows-1252").decode(bytes);
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const readable = text
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (/^login/i.test(readable)) {
+      throw new Error("A sessão do Sankhya não foi reconhecida pelo serviço solicitado.");
+    }
+    throw new Error(
+      readable
+        ? `O Sankhya retornou uma resposta inválida: ${readable.slice(0, 180)}`
+        : "O Sankhya retornou uma resposta vazia ou inválida.",
+    );
+  }
 }
 
 export async function loginSankhya(username: string, password: string) {
@@ -139,7 +157,7 @@ export async function callSankhya(
   serviceName: string,
   requestBody: unknown,
 ) {
-  const response = await fetch(omUrl(module, serviceName), {
+  const response = await fetch(omUrl(module, serviceName, session.jsessionid), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

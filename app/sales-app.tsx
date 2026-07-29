@@ -95,7 +95,17 @@ const sankhyaDate = (value: unknown) => {
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const data = await response.json();
+  const text = await response.text();
+  let data: ({ error?: string } & T);
+  try {
+    data = JSON.parse(text) as ({ error?: string } & T);
+  } catch {
+    throw new Error(
+      response.ok
+        ? "O servidor retornou uma resposta inválida."
+        : "O servidor não conseguiu concluir a solicitação. Reinicie o app e tente novamente.",
+    );
+  }
   if (!response.ok) throw new Error(data.error || "Não foi possível concluir.");
   return data as T;
 }

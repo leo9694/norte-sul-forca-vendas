@@ -82,3 +82,16 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   assert.match(activeFlow, /Tabela ativa cadastrada neste cliente/);
   assert.doesNotMatch(activeFlow, /className="stepper"/);
 });
+
+test("sends orders through an authenticated Sankhya service session", async () => {
+  const [sankhyaSource, orderSource] = await Promise.all([
+    readFile(path.join(projectRoot, "app", "api", "_lib", "sankhya.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "sankhya", "orders", "route.ts"), "utf8"),
+  ]);
+
+  assert.match(sankhyaSource, /mgeSession=/);
+  assert.match(sankhyaSource, /A sessão do Sankhya não foi reconhecida/);
+  assert.match(orderSource, /DHTIPOPER/);
+  assert.match(orderSource, /DHTIPVENDA/);
+  assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);
+});

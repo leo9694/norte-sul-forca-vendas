@@ -10,6 +10,13 @@ type OrderItem = {
   priceTable: number;
 };
 
+function sankhyaDateTime(value: unknown) {
+  const text = String(value ?? "").trim();
+  const compact = text.match(/^(\d{2})(\d{2})(\d{4})\s+(\d{2}:\d{2}:\d{2})$/);
+  if (compact) return `${compact[1]}/${compact[2]}/${compact[3]} ${compact[4]}`;
+  return text;
+}
+
 export async function POST(request: Request) {
   try {
     const session = await requireSession(request);
@@ -49,6 +56,20 @@ export async function POST(request: Request) {
     const partnerData = partnerRows[0] as Record<string, unknown> | undefined;
     if (!partnerData) throw new Error("Cliente fora da carteira ou sem cadastro na empresa 1.");
 
+    const validOperations = await executeQuery(session, `
+      SELECT O.CODTIPOPER, O.DHALTER, O.TIPMOV
+        FROM TGFTOP O
+       WHERE O.CODTIPOPER = 5
+         AND O.DHALTER = (
+           SELECT MAX(O2.DHALTER)
+             FROM TGFTOP O2
+            WHERE O2.CODTIPOPER = O.CODTIPOPER
+         )
+         AND O.TIPMOV = 'P'
+    `);
+    const operationData = validOperations[0] as Record<string, unknown> | undefined;
+    if (!operationData) throw new Error("A TOP 5 não está configurada como Pedido de venda.");
+
     const allowedTables = await executeQuery(session, `
       SELECT DISTINCT N.CODTAB
         FROM TGFPAEM E
@@ -62,7 +83,7 @@ export async function POST(request: Request) {
     if (!allowedTables.length) throw new Error("Tabela de preço não cadastrada para este cliente na empresa 1.");
 
     const validNegotiations = await executeQuery(session, `
-      SELECT V.CODTIPVENDA
+      SELECT V.CODTIPVENDA, V.DHALTER
         FROM TGFTPV V
        WHERE V.CODTIPVENDA = ${negotiation}
          AND V.ATIVO = 'S'
@@ -72,7 +93,8 @@ export async function POST(request: Request) {
             WHERE V2.CODTIPVENDA = V.CODTIPVENDA
          )
     `);
-    if (!validNegotiations.length) throw new Error("Tipo de negociação inválido ou inativo.");
+    const negotiationData = validNegotiations[0] as Record<string, unknown> | undefined;
+    if (!negotiationData) throw new Error("Tipo de negociação inválido ou inativo.");
 
     const productCodes = items.map((item) => item.product).join(",");
     const validRows = await executeQuery(session, `
@@ -151,14 +173,21 @@ export async function POST(request: Request) {
           NUNOTA: {},
           TIPMOV: { $: "P" },
           DTNEG: { $: today },
+          DTENTSAI: { $: today },
           CODEMP: { $: String(partnerData.CODEMP) },
           CODPARC: { $: String(partner) },
           CODTIPOPER: { $: "5" },
+          DHTIPOPER: { $: sankhyaDateTime(operationData.DHALTER) },
           CODTIPVENDA: { $: String(negotiation) },
+          DHTIPVENDA: { $: sankhyaDateTime(negotiationData.DHALTER) },
           CODVEND: { $: String(session.sellerId) },
-          CODNAT: { $: "0" },
+          CODNAT: { $: "1010000" },
           CODCENCUS: { $: "0" },
           CODPROJ: { $: "0" },
+          CODMOEDA: { $: "0" },
+          CIF_FOB: { $: "C" },
+          TIPFRETE: { $: "N" },
+          VLRFRETE: { $: "0" },
           OBSERVACAO: { $: (body.observation ?? "Pedido força de vendas").slice(0, 250) },
         },
         itens: {
@@ -189,6 +218,9 @@ export async function POST(request: Request) {
           groupIcms: Number(partnerData.GRUPOICMS || 0),
           priceCode,
           negotiation,
+          operationDate: sankhyaDateTime(operationData.DHALTER),
+          negotiationDate: sankhyaDateTime(negotiationData.DHALTER),
+          nature: 1010000,
           seller: session.sellerId,
           products: items.length,
           status: "ready",
