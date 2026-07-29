@@ -120,6 +120,8 @@ test("provides authenticated shared communication between Sankhya users", async 
   assert.match(chatStore, /mutationQueue/);
   assert.match(styleSource, /\.chat-shell\s*\{[\s\S]*?min-height:\s*0/);
   assert.doesNotMatch(styleSource, /\.chat-shell\s*\{[\s\S]*?min-height:\s*520px/);
+  assert.match(styleSource, /height:\s*calc\(100dvh - 68px - env\(safe-area-inset-bottom,\s*0px\)\)/);
+  assert.match(styleSource, /\.communication-page\s*\{[\s\S]*?min-height:\s*0/);
 });
 
 test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {
