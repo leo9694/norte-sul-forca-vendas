@@ -46,3 +46,5 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/data/chat-store.json
+/data/chat-store.json.*.tmp

@@ -45,6 +45,7 @@ export async function GET(request: Request) {
       return Response.json({
         rows,
         user: session.user,
+        userId: session.userId,
         sellerId: session.sellerId,
         sellerName: session.sellerName,
       });

@@ -19,6 +19,7 @@ export async function POST(request: Request) {
       {
         ok: true,
         user: session.user,
+        userId: session.userId,
         sellerId: session.sellerId,
         sellerName: session.sellerName,
       },

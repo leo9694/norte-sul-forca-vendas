@@ -24,8 +24,8 @@ import {
   LockKeyhole,
   LogOut,
   Mail,
-  MapPin,
   Menu,
+  MessageCircle,
   Minus,
   PackageCheck,
   Phone,
@@ -83,7 +83,7 @@ type ProductGroup = {
 };
 type ProductBrand = { MARCA: string };
 type OrderPhase = "header" | "products" | "review";
-type AppScreen = "orders" | "new" | "clients" | "more";
+type AppScreen = "orders" | "new" | "clients" | "communication" | "more";
 type AppHistoryView = AppScreen | "client-picker" | "logout";
 type AppHistoryState = {
   norteSulVendas: true;
@@ -91,6 +91,7 @@ type AppHistoryState = {
   baseScreen?: Exclude<AppScreen, "new">;
   phase?: OrderPhase;
   dialog?: "send" | "groups" | "brand";
+  conversationId?: string;
 };
 type OrderDraft = {
   id: string;
@@ -103,6 +104,31 @@ type OrderDraft = {
   negotiationName: string;
   observation: string;
   cart: CartItem[];
+};
+
+type ChatConversation = {
+  id: string;
+  other_user_id: number;
+  other_user_name: string;
+  updated_at: number;
+  last_message?: string | null;
+  last_message_at?: number | null;
+  unread_count?: number;
+};
+type ChatMessage = {
+  id: string;
+  conversation_id: string;
+  sender_user_id: number;
+  sender_name: string;
+  body: string;
+  created_at: number;
+  read_at?: number | null;
+};
+type SankhyaChatUser = {
+  CODUSU: number;
+  NOME: string;
+  LOGIN: string;
+  CODVEND?: number | null;
 };
 
 const OFFLINE_SESSION_KEY = "norte-sul-vendas:offline-session-enabled";
@@ -158,6 +184,7 @@ export function SalesApp() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [user, setUser] = useState("Leonardo");
+  const [userId, setUserId] = useState(0);
   const [sellerId, setSellerId] = useState(0);
   const [sellerName, setSellerName] = useState("");
   const [screen, setScreen] = useState<AppScreen>("orders");
@@ -183,6 +210,7 @@ export function SalesApp() {
   const applySnapshot = (snapshot: OfflineSnapshot, replaceOrders = true) => {
     setOfflineData(snapshot);
     setUser(snapshot.seller.user);
+    setUserId(snapshot.seller.userId);
     setSellerId(snapshot.seller.sellerId);
     setSellerName(snapshot.seller.sellerName);
     setClients(snapshot.clients as Client[]);
@@ -223,9 +251,10 @@ export function SalesApp() {
       const params = new URLSearchParams({ kind: "orders" });
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
-      const result = await api<{ rows: ApiRow[]; user?: string; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
+      const result = await api<{ rows: ApiRow[]; user?: string; userId?: number; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
       setOrders(result.rows);
       if (result.user) setUser(result.user);
+      if (result.userId) setUserId(Number(result.userId));
       if (result.sellerId) setSellerId(Number(result.sellerId));
       if (result.sellerName) setSellerName(String(result.sellerName));
       setAuthenticated(true);
@@ -383,11 +412,12 @@ export function SalesApp() {
 
     const bootstrap = async () => {
       try {
-        const result = await api<{ rows: ApiRow[]; user?: string; sellerId?: number; sellerName?: string }>(
+        const result = await api<{ rows: ApiRow[]; user?: string; userId?: number; sellerId?: number; sellerName?: string }>(
           "/api/sankhya/data?kind=orders",
         );
         setOrders(result.rows);
         setUser(result.user || "");
+        setUserId(Number(result.userId || 0));
         setSellerId(Number(result.sellerId || 0));
         setSellerName(result.sellerName || result.user || "");
         setAuthenticated(true);
@@ -450,6 +480,7 @@ export function SalesApp() {
       <LoginScreen
         onLogin={(loginData) => {
           setUser(loginData.user);
+          setUserId(loginData.userId);
           setSellerId(loginData.sellerId);
           setSellerName(loginData.sellerName);
           setAuthenticated(true);
@@ -462,7 +493,15 @@ export function SalesApp() {
 
   return (
     <div className="app-shell">
-      <DesktopSidebar active={screen} user={user} onOrders={() => navigateTo("orders")} onClients={showClients} onMore={() => navigateTo("more")} onLogout={requestLogout} />
+      <DesktopSidebar
+        active={screen}
+        user={user}
+        onOrders={() => navigateTo("orders")}
+        onClients={showClients}
+        onCommunication={() => navigateTo("communication")}
+        onMore={() => navigateTo("more")}
+        onLogout={requestLogout}
+      />
       <main className="main-shell">
         {screen === "orders" ? (
           <OrdersScreen
@@ -480,6 +519,8 @@ export function SalesApp() {
           />
         ) : screen === "clients" ? (
           <ClientsScreen clients={clients} loading={loadingClients} />
+        ) : screen === "communication" ? (
+          <CommunicationScreen currentUserId={userId} currentUserName={user} online={online} />
         ) : screen === "more" ? (
           <MoreScreen
             user={user}
@@ -518,7 +559,15 @@ export function SalesApp() {
           />
         )}
       </main>
-      {screen !== "new" && <MobileNav active={screen} onOrders={() => navigateTo("orders")} onClients={showClients} onMore={() => navigateTo("more")} />}
+      {screen !== "new" && (
+        <MobileNav
+          active={screen}
+          onOrders={() => navigateTo("orders")}
+          onClients={showClients}
+          onCommunication={() => navigateTo("communication")}
+          onMore={() => navigateTo("more")}
+        />
+      )}
       {clientPickerOpen && (
         <ClientPickerModal
           clients={clients}
@@ -571,7 +620,7 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (data: { user: string; sellerId: number; sellerName: string }) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (data: { user: string; userId: number; sellerId: number; sellerName: string }) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -582,13 +631,14 @@ function LoginScreen({ onLogin }: { onLogin: (data: { user: string; sellerId: nu
     setLoading(true);
     setError("");
     try {
-      const result = await api<{ user: string; sellerId: number; sellerName: string }>("/api/auth/login", {
+      const result = await api<{ user: string; userId: number; sellerId: number; sellerName: string }>("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
       onLogin({
         user: result.user || username,
+        userId: Number(result.userId),
         sellerId: Number(result.sellerId),
         sellerName: result.sellerName || result.user || username,
       });
@@ -663,6 +713,7 @@ function DesktopSidebar({
   user,
   onOrders,
   onClients,
+  onCommunication,
   onMore,
   onLogout,
 }: {
@@ -670,6 +721,7 @@ function DesktopSidebar({
   user: string;
   onOrders: () => void;
   onClients: () => void;
+  onCommunication: () => void;
   onMore: () => void;
   onLogout: () => void;
 }) {
@@ -682,7 +734,9 @@ function DesktopSidebar({
           <ShoppingBag size={20} /> Pedidos
         </button>
         <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound size={20} /> Clientes</button>
-        <button><MapPin size={20} /> Roteiro</button>
+        <button className={active === "communication" ? "active" : ""} onClick={onCommunication}>
+          <MessageCircle size={20} /> Comunicação
+        </button>
         <button className={active === "more" ? "active" : ""} onClick={onMore}><Menu size={20} /> Mais</button>
       </nav>
       <div className="sidebar-user">
@@ -873,6 +927,296 @@ function ClientsScreen({
           {!loading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
         </div>
       </section>
+    </div>
+  );
+}
+
+function CommunicationScreen({
+  currentUserId,
+  currentUserName,
+  online,
+}: {
+  currentUserId: number;
+  currentUserName: string;
+  online: boolean;
+}) {
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [activeConversation, setActiveConversation] = useState<ChatConversation | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messageBody, setMessageBody] = useState("");
+  const [showUserSearch, setShowUserSearch] = useState(false);
+  const [userQuery, setUserQuery] = useState("");
+  const [users, setUsers] = useState<SankhyaChatUser[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadConversations = async () => {
+    if (!online) return;
+    try {
+      const result = await api<{ rows: ChatConversation[] }>("/api/chat/conversations");
+      setConversations(result.rows);
+      setActiveConversation((current) =>
+        current ? result.rows.find((item) => item.id === current.id) ?? current : current,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível carregar as conversas.");
+    }
+  };
+
+  const loadMessages = async (conversation: ChatConversation, quiet = false) => {
+    if (!online) return;
+    if (!quiet) setLoading(true);
+    try {
+      const result = await api<{ rows: ChatMessage[] }>(
+        `/api/chat/messages?conversation=${encodeURIComponent(conversation.id)}`,
+      );
+      setMessages(result.rows);
+      setConversations((current) =>
+        current.map((item) => item.id === conversation.id ? { ...item, unread_count: 0 } : item),
+      );
+      window.setTimeout(() => {
+        const container = document.querySelector(".chat-messages");
+        if (container) container.scrollTop = container.scrollHeight;
+      }, 0);
+    } catch (err) {
+      if (!quiet) setError(err instanceof Error ? err.message : "Não foi possível carregar as mensagens.");
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!online) return;
+    void loadConversations();
+    const timer = window.setInterval(() => void loadConversations(), 5000);
+    return () => window.clearInterval(timer);
+  }, [online]);
+
+  useEffect(() => {
+    if (!activeConversation || !online) {
+      setMessages([]);
+      return;
+    }
+    void loadMessages(activeConversation);
+    const timer = window.setInterval(() => void loadMessages(activeConversation, true), 3000);
+    return () => window.clearInterval(timer);
+  }, [activeConversation?.id, online]);
+
+  useEffect(() => {
+    const handleChatBack = (event: PopStateEvent) => {
+      const state = event.state as AppHistoryState | null;
+      if (state?.norteSulVendas && state.view === "communication" && !state.conversationId) {
+        setActiveConversation(null);
+      }
+    };
+    window.addEventListener("popstate", handleChatBack);
+    return () => window.removeEventListener("popstate", handleChatBack);
+  }, []);
+
+  useEffect(() => {
+    if (!showUserSearch || !online || !userQuery.trim()) {
+      setUsers([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      api<{ rows: SankhyaChatUser[] }>(`/api/chat/users?q=${encodeURIComponent(userQuery)}`)
+        .then((result) => setUsers(result.rows))
+        .catch((err) => setError(err instanceof Error ? err.message : "Falha na pesquisa."));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [showUserSearch, userQuery, online]);
+
+  const openConversation = (conversation: ChatConversation) => {
+    setShowUserSearch(false);
+    const current = window.history.state as AppHistoryState | null;
+    window.history.pushState(
+      { ...(current ?? {}), norteSulVendas: true, view: "communication", conversationId: conversation.id } satisfies AppHistoryState,
+      "",
+      window.location.href,
+    );
+    setActiveConversation(conversation);
+    setError("");
+  };
+
+  const startConversation = async (chatUser: SankhyaChatUser) => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api<{ conversation: ChatConversation }>("/api/chat/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipientUserId: Number(chatUser.CODUSU) }),
+      });
+      setConversations((current) => [
+        result.conversation,
+        ...current.filter((item) => item.id !== result.conversation.id),
+      ]);
+      setShowUserSearch(false);
+      setUserQuery("");
+      const current = window.history.state as AppHistoryState | null;
+      window.history.pushState(
+        { ...(current ?? {}), norteSulVendas: true, view: "communication", conversationId: result.conversation.id } satisfies AppHistoryState,
+        "",
+        window.location.href,
+      );
+      setActiveConversation(result.conversation);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível iniciar a conversa.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendMessage = async (event: FormEvent) => {
+    event.preventDefault();
+    const body = messageBody.trim();
+    if (!body || !activeConversation || sending || !online) return;
+    setSending(true);
+    setError("");
+    try {
+      const result = await api<{ message: ChatMessage }>("/api/chat/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: activeConversation.id, body }),
+      });
+      setMessages((current) => [...current, result.message]);
+      setMessageBody("");
+      void loadConversations();
+      window.setTimeout(() => {
+        const container = document.querySelector(".chat-messages");
+        if (container) container.scrollTop = container.scrollHeight;
+      }, 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível enviar a mensagem.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const chatTime = (value?: number | null) =>
+    value ? new Date(Number(value)).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+
+  return (
+    <div className="page communication-page">
+      <header className="mobile-header chat-mobile-heading">
+        <BrandMark compact />
+        <div className="page-title"><h1>Comunicação</h1><p>Converse com a equipe</p></div>
+        <span className={`connection-dot ${online ? "online" : "offline"}`} />
+      </header>
+      <header className="desktop-header">
+        <div><span className="eyebrow">Equipe Norte Sul</span><h1>Comunicação</h1><p>Converse com qualquer usuário cadastrado no Sankhya.</p></div>
+      </header>
+
+      {!online ? (
+        <div className="chat-offline"><CloudOff size={28} /><strong>Comunicação indisponível offline</strong><span>Conecte-se à internet para receber e enviar mensagens.</span></div>
+      ) : (
+        <section className={`chat-shell ${activeConversation ? "has-active-chat" : ""}`}>
+          <aside className="chat-sidebar">
+            <div className="chat-sidebar-header">
+              <div><strong>Conversas</strong><small>{currentUserName}</small></div>
+              <button aria-label="Nova conversa" onClick={() => {
+                setShowUserSearch(true);
+                setActiveConversation(null);
+                setUserQuery("");
+              }}><Plus size={20} /></button>
+            </div>
+            <label className="search-box chat-search">
+              <Search size={18} />
+              <input
+                value={showUserSearch ? userQuery : ""}
+                onFocus={() => setShowUserSearch(true)}
+                onChange={(event) => {
+                  setShowUserSearch(true);
+                  setUserQuery(event.target.value);
+                }}
+                placeholder="Pesquisar usuário..."
+              />
+              {showUserSearch && <button onClick={() => { setShowUserSearch(false); setUserQuery(""); }}><X size={16} /></button>}
+            </label>
+            <div className="chat-list">
+              {showUserSearch ? (
+                <>
+                  {!userQuery.trim() && <div className="chat-list-empty">Digite o nome ou login do usuário.</div>}
+                  {userQuery.trim() && !users.length && !loading && <div className="chat-list-empty">Nenhum usuário encontrado.</div>}
+                  {users.map((chatUser) => (
+                    <button key={chatUser.CODUSU} className="chat-user-row" onClick={() => void startConversation(chatUser)}>
+                      <span className="chat-avatar">{String(chatUser.NOME).charAt(0).toUpperCase()}</span>
+                      <span><strong>{chatUser.NOME}</strong><small>{chatUser.LOGIN} · Usuário {chatUser.CODUSU}</small></span>
+                      <MessageCircle size={18} />
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <>
+                  {!conversations.length && <div className="chat-list-empty">Nenhuma conversa ainda.<br />Toque em + para começar.</div>}
+                  {conversations.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      className={`conversation-row ${activeConversation?.id === conversation.id ? "active" : ""}`}
+                      onClick={() => openConversation(conversation)}
+                    >
+                      <span className="chat-avatar">{conversation.other_user_name.charAt(0).toUpperCase()}</span>
+                      <span className="conversation-copy">
+                        <strong>{conversation.other_user_name}</strong>
+                        <small>{conversation.last_message || "Conversa iniciada"}</small>
+                      </span>
+                      <span className="conversation-meta">
+                        <small>{chatTime(conversation.last_message_at || conversation.updated_at)}</small>
+                        {Number(conversation.unread_count || 0) > 0 && <strong>{conversation.unread_count}</strong>}
+                      </span>
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          </aside>
+
+          <div className="chat-panel">
+            {activeConversation ? (
+              <>
+                <header className="chat-contact-header">
+                  <button className="chat-back" onClick={() => window.history.back()}><ArrowLeft size={21} /></button>
+                  <span className="chat-avatar">{activeConversation.other_user_name.charAt(0).toUpperCase()}</span>
+                  <span><strong>{activeConversation.other_user_name}</strong><small>Usuário Sankhya {activeConversation.other_user_id}</small></span>
+                  <span className="connection-dot online" />
+                </header>
+                <div className="chat-messages">
+                  {loading ? <div className="chat-list-empty"><LoaderCircle className="spin" /> Carregando mensagens...</div> : (
+                    <>
+                      {!messages.length && <div className="chat-welcome"><MessageCircle size={28} /><strong>Início da conversa</strong><span>Envie uma mensagem para {activeConversation.other_user_name}.</span></div>}
+                      {messages.map((message) => {
+                        const mine = Number(message.sender_user_id) === currentUserId;
+                        return (
+                          <div className={`message-bubble ${mine ? "mine" : ""}`} key={message.id}>
+                            {!mine && <strong>{message.sender_name}</strong>}
+                            <p>{message.body}</p>
+                            <small>{chatTime(message.created_at)}{mine && message.read_at ? " · Lida" : ""}</small>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+                <form className="chat-composer" onSubmit={sendMessage}>
+                  <input
+                    value={messageBody}
+                    onChange={(event) => setMessageBody(event.target.value)}
+                    placeholder="Digite uma mensagem"
+                    maxLength={2000}
+                  />
+                  <button disabled={!messageBody.trim() || sending} aria-label="Enviar mensagem">
+                    {sending ? <LoaderCircle className="spin" size={19} /> : <Send size={20} />}
+                  </button>
+                </form>
+              </>
+            ) : (
+              <div className="chat-placeholder"><MessageCircle size={42} /><strong>Selecione uma conversa</strong><span>Ou pesquise um usuário do Sankhya para começar.</span></div>
+            )}
+          </div>
+        </section>
+      )}
+      {error && <div className="global-error chat-error">{error}</div>}
     </div>
   );
 }
@@ -1929,11 +2273,13 @@ function MobileNav({
   active,
   onOrders,
   onClients,
+  onCommunication,
   onMore,
 }: {
-  active: "orders" | "clients" | "more";
+  active: Exclude<AppScreen, "new">;
   onOrders: () => void;
   onClients: () => void;
+  onCommunication: () => void;
   onMore: () => void;
 }) {
   return (
@@ -1941,7 +2287,7 @@ function MobileNav({
       <button><Home /><span>Início</span></button>
       <button className={active === "orders" ? "active" : ""} onClick={onOrders}><ShoppingBag /><span>Pedidos</span></button>
       <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound /><span>Clientes</span></button>
-      <button><MapPin /><span>Roteiro</span></button>
+      <button className={active === "communication" ? "active" : ""} onClick={onCommunication}><MessageCircle /><span>Comunicação</span></button>
       <button className={active === "more" ? "active" : ""} onClick={onMore}><Menu /><span>Mais</span></button>
     </nav>
   );

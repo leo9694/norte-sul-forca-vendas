@@ -98,6 +98,27 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(appSource, /phase:\s*nextPhase/);
 });
 
+test("provides authenticated shared communication between Sankhya users", async () => {
+  const [appSource, usersSource, conversationsSource, messagesSource, chatStore] = await Promise.all([
+    readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "chat", "users", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "chat", "conversations", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "chat", "messages", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "db", "chat.ts"), "utf8"),
+  ]);
+
+  assert.match(appSource, /function CommunicationScreen/);
+  assert.match(appSource, />Comunicação</);
+  assert.match(appSource, /Pesquisar usuário/);
+  assert.match(appSource, /setInterval\(\(\) => void loadMessages/);
+  assert.match(usersSource, /FROM TSIUSU/);
+  assert.match(usersSource, /requireSession/);
+  assert.match(conversationsSource, /createConversation/);
+  assert.match(messagesSource, /addMessage/);
+  assert.match(chatStore, /chat-store\.json/);
+  assert.match(chatStore, /mutationQueue/);
+});
+
 test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {
   const source = await readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8");
   const activeFlow = source.slice(
