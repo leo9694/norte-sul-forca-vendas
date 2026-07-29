@@ -359,6 +359,9 @@ textarea:focus { border-color: var(--green); }
 .confirm-modal { width: min(460px, 100%); background: white; border-radius: 20px; padding: 30px; text-align: center; position: relative; box-shadow: 0 30px 80px rgba(0,0,0,.24); }
 .modal-close { position: absolute; right: 14px; top: 14px; width: 36px; height: 36px; display: grid; place-items: center; border: 0; background: #f2f5f3; border-radius: 50%; cursor: pointer; }
 .confirm-icon { margin: 0 auto 15px; width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; color: white; background: var(--green); }
+.logout-icon { background: #9b3b35; }
+.logout-action { background: linear-gradient(135deg, #a1453d, #81332e); }
+.logout-action:hover { background: #71302b; }
 .confirm-modal h2 { margin: 0 0 8px; font-size: 23px; }
 .confirm-modal > p { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .confirm-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; text-align: left; }
@@ -430,7 +433,7 @@ textarea:focus { border-color: var(--green); }
   .main-shell { padding-left: 0; }
   .page { padding: 22px 22px 105px; }
   .desktop-header { display: none; }
-  .mobile-header { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .mobile-header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin-bottom: 22px; }
   .page-title h1 { margin: 0; font-size: 24px; letter-spacing: -.04em; }
   .page-title p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
   .mobile-header .icon-button { border: 0; background: transparent; }

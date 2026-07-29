@@ -89,6 +89,8 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(appSource, /Aguardando internet/);
   assert.match(appSource, /beforeinstallprompt/);
   assert.match(appSource, /Instalar aplicativo/);
+  assert.match(appSource, /Deseja sair do aplicativo/);
+  assert.doesNotMatch(appSource, /button className="avatar"/);
 });
 
 test("keeps the new sales-order flow modal, filter-first and draft-aware", async () => {

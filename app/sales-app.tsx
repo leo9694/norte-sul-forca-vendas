@@ -147,6 +147,8 @@ export function SalesApp() {
   const [iosDevice, setIosDevice] = useState(false);
   const [secureContext, setSecureContext] = useState(true);
   const [clientPickerOpen, setClientPickerOpen] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [startingPartner, setStartingPartner] = useState<Partner | null>(null);
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
@@ -345,10 +347,16 @@ export function SalesApp() {
   }, []);
 
   const logout = async () => {
-    if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
-    localStorage.setItem(OFFLINE_SESSION_KEY, "false");
-    setAuthenticated(false);
-    setScreen("orders");
+    setLoggingOut(true);
+    try {
+      if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+      localStorage.setItem(OFFLINE_SESSION_KEY, "false");
+      setAuthenticated(false);
+      setScreen("orders");
+      setLogoutConfirmOpen(false);
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   if (checkingSession) {
@@ -378,14 +386,13 @@ export function SalesApp() {
 
   return (
     <div className="app-shell">
-      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onClients={showClients} onMore={() => setScreen("more")} onLogout={logout} />
+      <DesktopSidebar active={screen} user={user} onOrders={() => setScreen("orders")} onClients={showClients} onMore={() => setScreen("more")} onLogout={() => setLogoutConfirmOpen(true)} />
       <main className="main-shell">
         {screen === "orders" ? (
           <OrdersScreen
             orders={orders}
             loading={loadingOrders}
             drafts={drafts}
-            user={user}
             onNew={openNewOrder}
             onResume={(draft) => {
               setActiveDraft(draft);
@@ -393,10 +400,9 @@ export function SalesApp() {
               setScreen("new");
             }}
             onPeriodChange={loadOrders}
-            onLogout={logout}
           />
         ) : screen === "clients" ? (
-          <ClientsScreen clients={clients} loading={loadingClients} user={user} onLogout={logout} />
+          <ClientsScreen clients={clients} loading={loadingClients} />
         ) : screen === "more" ? (
           <MoreScreen
             user={user}
@@ -411,7 +417,7 @@ export function SalesApp() {
             secureContext={secureContext}
             onInstall={() => void installApplication()}
             onLoad={() => void makeLoad()}
-            onLogout={logout}
+            onLogout={() => setLogoutConfirmOpen(true)}
           />
         ) : (
           <NewOrderV2
@@ -449,6 +455,22 @@ export function SalesApp() {
             setScreen("new");
           }}
         />
+      )}
+      {logoutConfirmOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Confirmar saída">
+          <div className="confirm-modal logout-confirm-modal">
+            <button className="modal-close" onClick={() => setLogoutConfirmOpen(false)} aria-label="Fechar"><X size={20} /></button>
+            <span className="confirm-icon logout-icon"><LogOut size={27} /></span>
+            <h2>Deseja sair do aplicativo?</h2>
+            <p>Será necessário informar novamente suas credenciais para fazer carga ou enviar pedidos. Seus dados offline e rascunhos continuarão salvos neste aparelho.</p>
+            <div className="modal-actions">
+              <button className="secondary" onClick={() => setLogoutConfirmOpen(false)} disabled={loggingOut}>Cancelar</button>
+              <button className="primary logout-action" onClick={logout} disabled={loggingOut}>
+                {loggingOut ? <LoaderCircle className="spin" size={18} /> : <><LogOut size={18} /> Sim, sair</>}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {toast && (
         <button className="toast" onClick={() => setToast("")}>
@@ -599,20 +621,16 @@ function OrdersScreen({
   orders,
   loading,
   drafts,
-  user,
   onNew,
   onResume,
   onPeriodChange,
-  onLogout,
 }: {
   orders: ApiRow[];
   loading: boolean;
   drafts: OrderDraft[];
-  user: string;
   onNew: () => void;
   onResume: (draft: OrderDraft) => void;
   onPeriodChange: (dateFrom?: string, dateTo?: string) => void;
-  onLogout: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Todos");
@@ -636,7 +654,6 @@ function OrdersScreen({
         <BrandMark compact />
         <div className="page-title"><h1>Pedidos</h1><p>Acompanhe seus pedidos e rascunhos</p></div>
         <button className="icon-button"><Bell size={23} /></button>
-        <button className="avatar" onClick={onLogout}>{user.charAt(0).toUpperCase()}</button>
       </header>
       <header className="desktop-header">
         <div><span className="eyebrow">Operação comercial</span><h1>Pedidos</h1><p>Acompanhe sua carteira e crie novas vendas.</p></div>
@@ -719,13 +736,9 @@ function Metric({ icon, label, value, blue }: { icon: React.ReactNode; label: st
 function ClientsScreen({
   clients,
   loading,
-  user,
-  onLogout,
 }: {
   clients: Client[];
   loading: boolean;
-  user: string;
-  onLogout: () => void;
 }) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
@@ -740,7 +753,6 @@ function ClientsScreen({
         <BrandMark compact />
         <div className="page-title"><h1>Clientes</h1><p>Sua carteira no Sankhya</p></div>
         <button className="icon-button"><Bell size={23} /></button>
-        <button className="avatar" onClick={onLogout}>{user.charAt(0).toUpperCase()}</button>
       </header>
       <header className="desktop-header">
         <div><span className="eyebrow">Carteira comercial</span><h1>Clientes</h1><p>Todos os clientes ativos vinculados ao seu cadastro de vendedor.</p></div>
@@ -827,7 +839,6 @@ function MoreScreen({
         <BrandMark compact />
         <div className="page-title"><h1>Mais</h1><p>Dados e sincronização</p></div>
         <span className={`connection-dot ${online ? "online" : "offline"}`} title={online ? "Online" : "Offline"} />
-        <button className="avatar" onClick={onLogout}>{user.charAt(0).toUpperCase()}</button>
       </header>
       <header className="desktop-header">
         <div><span className="eyebrow">Área do vendedor</span><h1>Mais</h1><p>Gerencie a carga local e consulte seus dados de acesso.</p></div>
