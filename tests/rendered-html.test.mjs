@@ -37,7 +37,8 @@ test("renders the sales application shell", async () => {
   assert.match(html, /<html lang="pt-BR">/i);
   assert.match(html, /<title>Norte Sul Vendas<\/title>/i);
   assert.match(html, /Conectando ao Sankhya/);
-  assert.match(html, /rel="manifest"/);
+  assert.match(html, /rel="manifest"\s+href="\/manifest\.webmanifest"/);
+  assert.doesNotMatch(html, /rel="manifest"[^>]+localhost/i);
   assert.match(html, /\/assets\/[^"]+\.css/);
   assert.match(html, /\/assets\/[^"]+\.js/);
 });

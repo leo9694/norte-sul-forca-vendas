@@ -177,6 +177,18 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  const forwardedHost = String(
+    request.headers["x-forwarded-host"]
+      || request.headers["x-original-host"]
+      || request.headers.host
+      || `localhost:${publicPort}`,
+  ).split(",")[0].trim();
+  const forwardedProto = String(
+    request.headers["x-forwarded-proto"]
+      || request.headers["x-original-proto"]
+      || "http",
+  ).split(",")[0].trim();
+
   const proxy = http.request({
     host: loopback,
     port: internalPort,
@@ -185,8 +197,8 @@ const server = http.createServer((request, response) => {
     headers: {
       ...request.headers,
       host: request.headers.host || `localhost:${publicPort}`,
-      "x-forwarded-host": request.headers.host || `localhost:${publicPort}`,
-      "x-forwarded-proto": "http",
+      "x-forwarded-host": forwardedHost,
+      "x-forwarded-proto": forwardedProto,
     },
   }, (proxyResponse) => {
     response.writeHead(proxyResponse.statusCode || 500, proxyResponse.headers);

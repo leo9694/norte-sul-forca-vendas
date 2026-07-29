@@ -10,21 +10,17 @@ const manrope = Manrope({
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
-  const host = requestHeaders.get("host") || "localhost:3000";
+  const host = (
+    requestHeaders.get("x-forwarded-host")
+    || requestHeaders.get("host")
+    || "localhost:3000"
+  ).split(",")[0].trim();
   const protocol = requestHeaders.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
   const metadataBase = new URL(`${protocol}://${host}`);
   return {
     metadataBase,
     title: "Norte Sul Vendas",
     description: "Força de vendas integrada ao Sankhya",
-    manifest: "/manifest.webmanifest",
-    icons: {
-      icon: [
-        { url: "/app-icon-192.png", sizes: "192x192", type: "image/png" },
-        { url: "/app-icon-512.png", sizes: "512x512", type: "image/png" },
-      ],
-      apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
-    },
     appleWebApp: {
       capable: true,
       statusBarStyle: "default",
@@ -55,6 +51,12 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR">
+      <head>
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="icon" href="/app-icon-192.png" sizes="192x192" type="image/png" />
+        <link rel="icon" href="/app-icon-512.png" sizes="512x512" type="image/png" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+      </head>
       <body className={manrope.variable}>{children}</body>
     </html>
   );
