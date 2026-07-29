@@ -47,7 +47,7 @@ export async function GET(request: Request) {
 
     if (kind === "portfolio") {
       const rows = await executeQuery(session, `
-        SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGCCPF,
+        SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
                P.TELEFONE, P.EMAIL, P.CODVEND,
                E.CODEMP, E.GRUPOICMS, E.CODTAB
           FROM TGFPAR P

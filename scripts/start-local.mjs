@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -11,6 +11,7 @@ const localUrl = `http://localhost:${publicPort}`;
 const projectRoot = process.cwd();
 const clientDir = path.resolve(projectRoot, "dist", "client");
 const serverEntry = path.resolve(projectRoot, "dist", "server", "index.js");
+const clientManifest = path.resolve(clientDir, ".vite", "manifest.json");
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -72,6 +73,41 @@ function staticFileFor(urlPath) {
   }
 }
 
+function newestModifiedTime(target) {
+  try {
+    const stat = fs.statSync(target);
+    if (stat.isFile()) return stat.mtimeMs;
+    if (!stat.isDirectory()) return 0;
+    return fs.readdirSync(target, { withFileTypes: true }).reduce((newest, entry) => {
+      const entryPath = path.join(target, entry.name);
+      return Math.max(newest, newestModifiedTime(entryPath));
+    }, stat.mtimeMs);
+  } catch {
+    return 0;
+  }
+}
+
+function buildIsOutdated() {
+  if (!fs.existsSync(serverEntry) || !fs.existsSync(clientManifest)) return true;
+  const buildTime = Math.min(
+    fs.statSync(serverEntry).mtimeMs,
+    fs.statSync(clientManifest).mtimeMs,
+  );
+  const sourceTargets = [
+    "app",
+    "build",
+    "public",
+    "worker",
+    "package.json",
+    "package-lock.json",
+    "vite.config.ts",
+    "next.config.ts",
+  ];
+  return sourceTargets.some((target) =>
+    newestModifiedTime(path.resolve(projectRoot, target)) > buildTime,
+  );
+}
+
 function serveStatic(request, response, filePath) {
   const extension = path.extname(filePath).toLowerCase();
   const headers = {
@@ -86,9 +122,20 @@ function serveStatic(request, response, filePath) {
   fs.createReadStream(filePath).pipe(response);
 }
 
-if (!fs.existsSync(serverEntry) || !fs.existsSync(clientDir)) {
-  console.error("\nA versão compilada não foi encontrada. Execute: npm run rebuild\n");
-  process.exit(1);
+if (buildIsOutdated()) {
+  console.log("\nAlterações detectadas. Atualizando o app antes de iniciar...\n");
+  const buildCommand = process.platform === "win32"
+    ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "npm run build"] }
+    : { command: "npm", args: ["run", "build"] };
+  const build = spawnSync(buildCommand.command, buildCommand.args, {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: "inherit",
+  });
+  if (build.status !== 0) {
+    console.error("\nA atualização falhou. Corrija o erro acima e execute npm start novamente.\n");
+    process.exit(build.status || 1);
+  }
 }
 
 if (await portIsBusy(publicPort)) {
