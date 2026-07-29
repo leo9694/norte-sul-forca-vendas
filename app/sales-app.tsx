@@ -1104,6 +1104,7 @@ function NewOrderV2({
     const current = window.history.state as AppHistoryState | null;
     setPendingGroups(selectedGroups);
     setGroupSearch("");
+    setExpandedGroups([]);
     window.history.pushState(
       { ...(current ?? {}), norteSulVendas: true, view: "new", phase, dialog: "groups" } satisfies AppHistoryState,
       "",
@@ -1312,7 +1313,7 @@ function NewOrderV2({
       const cachedGroups = offlineGroups();
       setGroups(cachedGroups);
       setBrands(offlineBrands());
-      setExpandedGroups(cachedGroups.filter((group) => group.ANALITICO !== "S").map((group) => Number(group.CODGRUPOPROD)));
+      setExpandedGroups([]);
       return;
     }
     api<{ rows: ProductGroup[]; brands: ProductBrand[] }>(
@@ -1321,7 +1322,7 @@ function NewOrderV2({
       .then((result) => {
         setGroups(result.rows);
         setBrands(result.brands);
-        setExpandedGroups(result.rows.filter((group) => group.ANALITICO !== "S").map((group) => Number(group.CODGRUPOPROD)));
+        setExpandedGroups([]);
       })
       .catch((err) => {
         const cached = offlineGroups();

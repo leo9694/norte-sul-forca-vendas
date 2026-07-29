@@ -116,6 +116,7 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   assert.match(activeFlow, /groups:\s*selectedGroups\.join/);
   assert.match(activeFlow, /Todas as marcas/);
   assert.match(activeFlow, /CODGRUPAI/);
+  assert.match(activeFlow, /setExpandedGroups\(\[\]\)/);
   assert.match(activeFlow, /className="order-phase-nav"/);
   assert.match(activeFlow, /Tabela ativa cadastrada neste cliente/);
   assert.doesNotMatch(activeFlow, /className="stepper"/);
