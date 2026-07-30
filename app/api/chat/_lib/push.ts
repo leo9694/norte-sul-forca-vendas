@@ -28,8 +28,8 @@ export async function sendChatPush(
   const payload = JSON.stringify({
     title: `Nova mensagem de ${senderName}`,
     body,
-    icon: "/app-icon-192.png",
-    badge: "/app-icon-192.png",
+    icon: "/brand-app-icon-192.png",
+    badge: "/notification-badge-96.png",
     tag: `chat-${conversationId}`,
     data: { url: "/?open=communication" },
   });

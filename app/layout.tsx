@@ -30,7 +30,7 @@ export async function generateMetadata(): Promise<Metadata> {
       title: "Norte Sul Vendas",
       description: "Pedidos integrados ao Sankhya",
       type: "website",
-      images: [{ url: "/og.png", width: 1748, height: 910, alt: "Norte Sul Vendas" }],
+      images: [{ url: "/og.png", width: 1731, height: 909, alt: "Norte Sul Vendas" }],
     },
     twitter: {
       card: "summary_large_image",
@@ -53,9 +53,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR">
       <head>
         <link rel="manifest" href="/manifest.webmanifest" />
-        <link rel="icon" href="/app-icon-192.png" sizes="192x192" type="image/png" />
-        <link rel="icon" href="/app-icon-512.png" sizes="512x512" type="image/png" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+        <link rel="icon" href="/favicon-48.png" sizes="48x48" type="image/png" />
+        <link rel="icon" href="/brand-app-icon-192.png" sizes="192x192" type="image/png" />
+        <link rel="apple-touch-icon" href="/brand-apple-touch-icon.png" sizes="180x180" />
       </head>
       <body className={manrope.variable}>{children}</body>
     </html>

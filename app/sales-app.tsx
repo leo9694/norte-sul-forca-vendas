@@ -726,7 +726,9 @@ export function SalesApp() {
 function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`brand ${compact ? "compact" : ""}`}>
-      <span className="brand-mark"><Sprout size={compact ? 22 : 28} strokeWidth={2.2} /></span>
+      <span className="brand-mark">
+        <img src="/brand-logo.png" alt={compact ? "Norte Sul" : ""} />
+      </span>
       {!compact && (
         <span><strong>Norte Sul</strong><small>Força de vendas</small></span>
       )}

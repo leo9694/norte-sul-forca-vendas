@@ -1,10 +1,13 @@
-const CACHE = "norte-sul-vendas-v6";
+const CACHE = "norte-sul-vendas-v7";
 const SHELL = [
   "/manifest.webmanifest",
-  "/app-icon-192.png",
-  "/app-icon-512.png",
-  "/app-icon-maskable-512.png",
-  "/apple-touch-icon.png",
+  "/brand-logo.png",
+  "/favicon-48.png",
+  "/brand-app-icon-192.png",
+  "/brand-app-icon-512.png",
+  "/brand-app-icon-maskable-512.png",
+  "/brand-apple-touch-icon.png",
+  "/notification-badge-96.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -81,8 +84,8 @@ self.addEventListener("push", (event) => {
   }
   event.waitUntil(self.registration.showNotification(payload.title || "Nova mensagem", {
     body: payload.body || "Você recebeu uma nova mensagem.",
-    icon: payload.icon || "/app-icon-192.png",
-    badge: payload.badge || "/app-icon-192.png",
+    icon: payload.icon || "/brand-app-icon-192.png",
+    badge: payload.badge || "/notification-badge-96.png",
     tag: payload.tag || "chat-message",
     renotify: true,
     vibrate: [200, 100, 200],
