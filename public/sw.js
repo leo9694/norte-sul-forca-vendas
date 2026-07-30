@@ -1,4 +1,4 @@
-const CACHE = "norte-sul-vendas-v5";
+const CACHE = "norte-sul-vendas-v6";
 const SHELL = [
   "/manifest.webmanifest",
   "/app-icon-192.png",
@@ -70,4 +70,22 @@ self.addEventListener("notificationclick", (event) => {
     }
     await self.clients.openWindow(targetUrl);
   })());
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data?.json() || {};
+  } catch {
+    payload = { body: event.data?.text() || "Você recebeu uma nova mensagem." };
+  }
+  event.waitUntil(self.registration.showNotification(payload.title || "Nova mensagem", {
+    body: payload.body || "Você recebeu uma nova mensagem.",
+    icon: payload.icon || "/app-icon-192.png",
+    badge: payload.badge || "/app-icon-192.png",
+    tag: payload.tag || "chat-message",
+    renotify: true,
+    vibrate: [200, 100, 200],
+    data: payload.data || { url: "/?open=communication" },
+  }));
 });

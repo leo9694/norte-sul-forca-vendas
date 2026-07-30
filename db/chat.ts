@@ -21,17 +21,32 @@ export type StoredMessage = {
   read_at: number | null;
 };
 
+export type StoredPushSubscription = {
+  user_id: number;
+  endpoint: string;
+  expiration_time: number | null;
+  p256dh: string;
+  auth: string;
+  updated_at: number;
+};
+
 type ChatStore = {
   version: 1;
   conversations: StoredConversation[];
   messages: StoredMessage[];
+  push_subscriptions: StoredPushSubscription[];
 };
 
 const dataDirectory = path.resolve(process.cwd(), "data");
 const storePath = path.join(dataDirectory, "chat-store.json");
 let mutationQueue: Promise<unknown> = Promise.resolve();
 
-const emptyStore = (): ChatStore => ({ version: 1, conversations: [], messages: [] });
+const emptyStore = (): ChatStore => ({
+  version: 1,
+  conversations: [],
+  messages: [],
+  push_subscriptions: [],
+});
 
 async function readStore(): Promise<ChatStore> {
   try {
@@ -40,6 +55,7 @@ async function readStore(): Promise<ChatStore> {
       version: 1,
       conversations: Array.isArray(parsed.conversations) ? parsed.conversations : [],
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      push_subscriptions: Array.isArray(parsed.push_subscriptions) ? parsed.push_subscriptions : [],
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyStore();
@@ -169,6 +185,46 @@ export async function addMessage(
     };
     store.messages.push(message);
     conversation!.updated_at = message.created_at;
-    return message;
+    const recipientUserId = conversation!.participant_a === sender.id
+      ? conversation!.participant_b
+      : conversation!.participant_a;
+    return { message, recipientUserId };
   });
+}
+
+export async function savePushSubscription(
+  userId: number,
+  subscription: Omit<StoredPushSubscription, "user_id" | "updated_at">,
+) {
+  return mutateStore((store) => {
+    store.push_subscriptions = store.push_subscriptions.filter(
+      (item) => item.endpoint !== subscription.endpoint,
+    );
+    store.push_subscriptions.push({
+      ...subscription,
+      user_id: userId,
+      updated_at: Date.now(),
+    });
+  });
+}
+
+export async function removePushSubscription(userId: number, endpoint: string) {
+  return mutateStore((store) => {
+    store.push_subscriptions = store.push_subscriptions.filter(
+      (item) => !(item.user_id === userId && item.endpoint === endpoint),
+    );
+  });
+}
+
+export async function removePushSubscriptionByEndpoint(endpoint: string) {
+  return mutateStore((store) => {
+    store.push_subscriptions = store.push_subscriptions.filter(
+      (item) => item.endpoint !== endpoint,
+    );
+  });
+}
+
+export async function listPushSubscriptions(userId: number) {
+  const store = await readStore();
+  return store.push_subscriptions.filter((item) => item.user_id === userId);
 }

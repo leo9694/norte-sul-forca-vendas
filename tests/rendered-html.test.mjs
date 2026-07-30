@@ -63,7 +63,7 @@ test("ships installable PWA files with the current cache policy", async () => {
 
   assert.match(manifest, /"display"\s*:\s*"standalone"/);
   assert.match(manifest, /Norte Sul/);
-  assert.match(serviceWorker, /norte-sul-vendas-v5/);
+  assert.match(serviceWorker, /norte-sul-vendas-v6/);
   assert.match(manifest, /app-icon-192\.png/);
   assert.match(manifest, /app-icon-512\.png/);
   assert.match(manifest, /app-icon-maskable-512\.png/);
@@ -74,6 +74,8 @@ test("ships installable PWA files with the current cache policy", async () => {
   assert.match(serviceWorker, /response\.ok/);
   assert.match(serviceWorker, /notificationclick/);
   assert.match(serviceWorker, /OPEN_COMMUNICATION/);
+  assert.match(serviceWorker, /addEventListener\("push"/);
+  assert.match(serviceWorker, /showNotification/);
 });
 
 test("keeps a seller-scoped offline load and manual refresh screen", async () => {
@@ -101,12 +103,13 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
 });
 
 test("provides authenticated shared communication between Sankhya users", async () => {
-  const [appSource, styleSource, usersSource, conversationsSource, messagesSource, chatStore] = await Promise.all([
+  const [appSource, styleSource, usersSource, conversationsSource, messagesSource, pushSource, chatStore] = await Promise.all([
     readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
     readFile(path.join(projectRoot, "app", "globals.css"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "chat", "users", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "chat", "conversations", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "chat", "messages", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "chat", "push", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "db", "chat.ts"), "utf8"),
   ]);
 
@@ -116,13 +119,16 @@ test("provides authenticated shared communication between Sankhya users", async 
   assert.match(appSource, /Pesquisar usuário/);
   assert.match(appSource, /setInterval\(\(\) => void loadMessages/);
   assert.match(appSource, /unreadMessages/);
-  assert.match(appSource, /showNotification/);
   assert.match(appSource, /Notification\.requestPermission/);
+  assert.match(appSource, /pushManager\.subscribe/);
+  assert.match(appSource, /\/api\/chat\/push/);
   assert.match(appSource, /nav-unread-badge/);
   assert.match(usersSource, /FROM TSIUSU/);
   assert.match(usersSource, /requireSession/);
   assert.match(conversationsSource, /createConversation/);
   assert.match(messagesSource, /addMessage/);
+  assert.match(messagesSource, /sendChatPush/);
+  assert.match(pushSource, /savePushSubscription/);
   assert.match(chatStore, /chat-store\.json/);
   assert.match(chatStore, /mutationQueue/);
   assert.match(styleSource, /\.chat-shell\s*\{[\s\S]*?min-height:\s*0/);

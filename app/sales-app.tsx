@@ -180,6 +180,52 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+function decodeVapidPublicKey(value: string) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+}
+
+async function registerPushNotifications() {
+  if (
+    !window.isSecureContext
+    || !("serviceWorker" in navigator)
+    || !("PushManager" in window)
+    || !("Notification" in window)
+    || Notification.permission !== "granted"
+  ) return false;
+
+  const { publicKey } = await api<{ publicKey: string }>("/api/chat/push");
+  if (!publicKey) return false;
+  const registration = await navigator.serviceWorker.ready;
+  const current = await registration.pushManager.getSubscription();
+  const subscription = current || await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: decodeVapidPublicKey(publicKey),
+  });
+  await api("/api/chat/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(subscription.toJSON()),
+  });
+  return true;
+}
+
+async function unregisterPushNotifications() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription) return;
+  if (navigator.onLine) {
+    await api("/api/chat/push", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: subscription.endpoint }),
+    }).catch(() => null);
+  }
+  await subscription.unsubscribe();
+}
+
 export function SalesApp() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
@@ -207,8 +253,6 @@ export function SalesApp() {
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [toast, setToast] = useState("");
   const [unreadMessages, setUnreadMessages] = useState(0);
-  const chatNotificationBaseline = useRef<Map<string, number>>(new Map());
-  const chatNotificationsInitialized = useRef(false);
 
   const applySnapshot = (snapshot: OfflineSnapshot, replaceOrders = true) => {
     setOfflineData(snapshot);
@@ -251,21 +295,27 @@ export function SalesApp() {
   const openCommunication = () => {
     navigateTo("communication");
     const mobileDevice = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
-    if (
-      mobileDevice
-      && window.isSecureContext
-      && "Notification" in window
-      && Notification.permission === "default"
-    ) {
-      void Notification.requestPermission();
-    }
+    if (!mobileDevice || !window.isSecureContext || !("Notification" in window)) return;
+    void (async () => {
+      if (Notification.permission === "default") await Notification.requestPermission();
+      if (Notification.permission === "granted") await registerPushNotifications();
+    })().catch(() => null);
   };
 
   useEffect(() => {
-    chatNotificationBaseline.current.clear();
-    chatNotificationsInitialized.current = false;
     setUnreadMessages(0);
   }, [userId]);
+
+  useEffect(() => {
+    if (
+      authenticated
+      && /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+      && "Notification" in window
+      && Notification.permission === "granted"
+    ) {
+      void registerPushNotifications().catch(() => null);
+    }
+  }, [authenticated, userId]);
 
   useEffect(() => {
     if (!authenticated || !online || !userId) return;
@@ -276,31 +326,6 @@ export function SalesApp() {
         if (cancelled) return;
         const total = result.rows.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
         setUnreadMessages(total);
-        const mobileDevice = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
-        for (const conversation of result.rows) {
-          const latest = Number(conversation.last_message_at || 0);
-          const previous = chatNotificationBaseline.current.get(conversation.id) || 0;
-          if (
-            chatNotificationsInitialized.current
-            && mobileDevice
-            && Number(conversation.unread_count || 0) > 0
-            && latest > previous
-            && "Notification" in window
-            && Notification.permission === "granted"
-            && "serviceWorker" in navigator
-          ) {
-            const registration = await navigator.serviceWorker.ready;
-            await registration.showNotification(`Nova mensagem de ${conversation.other_user_name}`, {
-              body: conversation.last_message || "Você recebeu uma nova mensagem.",
-              icon: "/app-icon-192.png",
-              badge: "/app-icon-192.png",
-              tag: `chat-${conversation.id}`,
-              data: { url: "/?open=communication" },
-            });
-          }
-          chatNotificationBaseline.current.set(conversation.id, latest);
-        }
-        chatNotificationsInitialized.current = true;
       } catch {
         // O contador é auxiliar e não deve interromper o restante do aplicativo.
       }
@@ -539,12 +564,11 @@ export function SalesApp() {
   const logout = async () => {
     setLoggingOut(true);
     try {
+      await unregisterPushNotifications().catch(() => null);
       if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
       localStorage.setItem(OFFLINE_SESSION_KEY, "false");
       setAuthenticated(false);
       setUnreadMessages(0);
-      chatNotificationBaseline.current.clear();
-      chatNotificationsInitialized.current = false;
       setScreen("orders");
       setLogoutConfirmOpen(false);
       replaceHistoryView("orders");
