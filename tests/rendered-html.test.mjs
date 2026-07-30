@@ -110,6 +110,7 @@ test("provides authenticated shared communication between Sankhya users", async 
 
   assert.match(appSource, /function CommunicationScreen/);
   assert.match(appSource, />Comunicação</);
+  assert.doesNotMatch(appSource, /Equipe Norte Sul/);
   assert.match(appSource, /Pesquisar usuário/);
   assert.match(appSource, /setInterval\(\(\) => void loadMessages/);
   assert.match(usersSource, /FROM TSIUSU/);

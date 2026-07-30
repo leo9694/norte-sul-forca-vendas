@@ -1104,10 +1104,6 @@ function CommunicationScreen({
         <div className="page-title"><h1>Comunicação</h1><p>Converse com a equipe</p></div>
         <span className={`connection-dot ${online ? "online" : "offline"}`} />
       </header>
-      <header className="desktop-header">
-        <div><span className="eyebrow">Equipe Norte Sul</span><h1>Comunicação</h1><p>Converse com qualquer usuário cadastrado no Sankhya.</p></div>
-      </header>
-
       {!online ? (
         <div className="chat-offline"><CloudOff size={28} /><strong>Comunicação indisponível offline</strong><span>Conecte-se à internet para receber e enviar mensagens.</span></div>
       ) : (
