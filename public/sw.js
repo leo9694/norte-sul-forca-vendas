@@ -1,4 +1,4 @@
-const CACHE = "norte-sul-vendas-v4";
+const CACHE = "norte-sul-vendas-v5";
 const SHELL = [
   "/manifest.webmanifest",
   "/app-icon-192.png",
@@ -54,5 +54,20 @@ self.addEventListener("fetch", (event) => {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/?open=communication";
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const existing = windows[0];
+    if (existing) {
+      await existing.focus();
+      existing.postMessage({ type: "OPEN_COMMUNICATION" });
+      return;
+    }
+    await self.clients.openWindow(targetUrl);
   })());
 });

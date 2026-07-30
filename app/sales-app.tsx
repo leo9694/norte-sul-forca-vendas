@@ -43,7 +43,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   getLatestOfflineSnapshot,
   getOfflineSnapshot,
@@ -206,6 +206,9 @@ export function SalesApp() {
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [toast, setToast] = useState("");
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const chatNotificationBaseline = useRef<Map<string, number>>(new Map());
+  const chatNotificationsInitialized = useRef(false);
 
   const applySnapshot = (snapshot: OfflineSnapshot, replaceOrders = true) => {
     setOfflineData(snapshot);
@@ -244,6 +247,71 @@ export function SalesApp() {
     setLogoutConfirmOpen(false);
     setScreen(nextScreen);
   };
+
+  const openCommunication = () => {
+    navigateTo("communication");
+    const mobileDevice = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (
+      mobileDevice
+      && window.isSecureContext
+      && "Notification" in window
+      && Notification.permission === "default"
+    ) {
+      void Notification.requestPermission();
+    }
+  };
+
+  useEffect(() => {
+    chatNotificationBaseline.current.clear();
+    chatNotificationsInitialized.current = false;
+    setUnreadMessages(0);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!authenticated || !online || !userId) return;
+    let cancelled = false;
+    const refreshUnreadMessages = async () => {
+      try {
+        const result = await api<{ rows: ChatConversation[] }>("/api/chat/conversations");
+        if (cancelled) return;
+        const total = result.rows.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
+        setUnreadMessages(total);
+        const mobileDevice = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+        for (const conversation of result.rows) {
+          const latest = Number(conversation.last_message_at || 0);
+          const previous = chatNotificationBaseline.current.get(conversation.id) || 0;
+          if (
+            chatNotificationsInitialized.current
+            && mobileDevice
+            && Number(conversation.unread_count || 0) > 0
+            && latest > previous
+            && "Notification" in window
+            && Notification.permission === "granted"
+            && "serviceWorker" in navigator
+          ) {
+            const registration = await navigator.serviceWorker.ready;
+            await registration.showNotification(`Nova mensagem de ${conversation.other_user_name}`, {
+              body: conversation.last_message || "Você recebeu uma nova mensagem.",
+              icon: "/app-icon-192.png",
+              badge: "/app-icon-192.png",
+              tag: `chat-${conversation.id}`,
+              data: { url: "/?open=communication" },
+            });
+          }
+          chatNotificationBaseline.current.set(conversation.id, latest);
+        }
+        chatNotificationsInitialized.current = true;
+      } catch {
+        // O contador é auxiliar e não deve interromper o restante do aplicativo.
+      }
+    };
+    void refreshUnreadMessages();
+    const timer = window.setInterval(() => void refreshUnreadMessages(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [authenticated, online, userId]);
 
   const loadOrders = async (dateFrom = "", dateTo = "") => {
     setLoadingOrders(true);
@@ -369,7 +437,17 @@ export function SalesApp() {
   };
 
   useEffect(() => {
-    replaceHistoryView("orders");
+    const notificationTarget = new URLSearchParams(window.location.search).get("open");
+    if (notificationTarget === "communication") {
+      window.history.replaceState(
+        { norteSulVendas: true, view: "communication" } satisfies AppHistoryState,
+        "",
+        window.location.pathname,
+      );
+      setScreen("communication");
+    } else {
+      replaceHistoryView("orders");
+    }
     const handleHistoryBack = (event: PopStateEvent) => {
       const state = event.state as AppHistoryState | null;
       const view = state?.norteSulVendas ? state.view : "orders";
@@ -401,12 +479,18 @@ export function SalesApp() {
       setInstalled(true);
       setInstallPrompt(null);
     };
+    const openCommunicationFromNotification = (event: MessageEvent) => {
+      if (event.data?.type !== "OPEN_COMMUNICATION") return;
+      pushHistoryView("communication");
+      setScreen("communication");
+    };
     updateConnection();
     window.addEventListener("online", updateConnection);
     window.addEventListener("offline", updateConnection);
     window.addEventListener("popstate", handleHistoryBack);
     window.addEventListener("beforeinstallprompt", captureInstallPrompt);
     window.addEventListener("appinstalled", markInstalled);
+    navigator.serviceWorker?.addEventListener("message", openCommunicationFromNotification);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => null);
     navigator.storage?.persist?.().catch(() => false);
 
@@ -438,6 +522,7 @@ export function SalesApp() {
       window.removeEventListener("popstate", handleHistoryBack);
       window.removeEventListener("beforeinstallprompt", captureInstallPrompt);
       window.removeEventListener("appinstalled", markInstalled);
+      navigator.serviceWorker?.removeEventListener("message", openCommunicationFromNotification);
     };
   }, []);
 
@@ -457,6 +542,9 @@ export function SalesApp() {
       if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
       localStorage.setItem(OFFLINE_SESSION_KEY, "false");
       setAuthenticated(false);
+      setUnreadMessages(0);
+      chatNotificationBaseline.current.clear();
+      chatNotificationsInitialized.current = false;
       setScreen("orders");
       setLogoutConfirmOpen(false);
       replaceHistoryView("orders");
@@ -498,7 +586,8 @@ export function SalesApp() {
         user={user}
         onOrders={() => navigateTo("orders")}
         onClients={showClients}
-        onCommunication={() => navigateTo("communication")}
+        onCommunication={openCommunication}
+        unreadMessages={unreadMessages}
         onMore={() => navigateTo("more")}
         onLogout={requestLogout}
       />
@@ -564,7 +653,8 @@ export function SalesApp() {
           active={screen}
           onOrders={() => navigateTo("orders")}
           onClients={showClients}
-          onCommunication={() => navigateTo("communication")}
+          onCommunication={openCommunication}
+          unreadMessages={unreadMessages}
           onMore={() => navigateTo("more")}
         />
       )}
@@ -714,6 +804,7 @@ function DesktopSidebar({
   onOrders,
   onClients,
   onCommunication,
+  unreadMessages,
   onMore,
   onLogout,
 }: {
@@ -722,6 +813,7 @@ function DesktopSidebar({
   onOrders: () => void;
   onClients: () => void;
   onCommunication: () => void;
+  unreadMessages: number;
   onMore: () => void;
   onLogout: () => void;
 }) {
@@ -736,6 +828,7 @@ function DesktopSidebar({
         <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound size={20} /> Clientes</button>
         <button className={active === "communication" ? "active" : ""} onClick={onCommunication}>
           <MessageCircle size={20} /> Comunicação
+          {unreadMessages > 0 && <span className="nav-unread-badge">{unreadMessages}</span>}
         </button>
         <button className={active === "more" ? "active" : ""} onClick={onMore}><Menu size={20} /> Mais</button>
       </nav>
@@ -2270,12 +2363,14 @@ function MobileNav({
   onOrders,
   onClients,
   onCommunication,
+  unreadMessages,
   onMore,
 }: {
   active: Exclude<AppScreen, "new">;
   onOrders: () => void;
   onClients: () => void;
   onCommunication: () => void;
+  unreadMessages: number;
   onMore: () => void;
 }) {
   return (
@@ -2283,7 +2378,10 @@ function MobileNav({
       <button><Home /><span>Início</span></button>
       <button className={active === "orders" ? "active" : ""} onClick={onOrders}><ShoppingBag /><span>Pedidos</span></button>
       <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound /><span>Clientes</span></button>
-      <button className={active === "communication" ? "active" : ""} onClick={onCommunication}><MessageCircle /><span>Comunicação</span></button>
+      <button className={active === "communication" ? "active" : ""} onClick={onCommunication}>
+        <span className="mobile-nav-icon"><MessageCircle />{unreadMessages > 0 && <strong className="nav-unread-badge">{unreadMessages}</strong>}</span>
+        <span>Comunicação</span>
+      </button>
       <button className={active === "more" ? "active" : ""} onClick={onMore}><Menu /><span>Mais</span></button>
     </nav>
   );

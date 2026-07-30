@@ -125,6 +125,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 .desktop-sidebar nav button:hover { background: #f2f7f4; color: var(--green); }
 .desktop-sidebar nav button.active { background: var(--green-soft); color: var(--green); }
+.nav-unread-badge {
+  min-width: 22px; height: 22px; padding: 0 6px; display: inline-grid; place-items: center;
+  border-radius: 999px; background: #d83b3b; color: white; font-size: 10px; font-weight: 850; line-height: 1;
+}
+.desktop-sidebar .nav-unread-badge { margin-left: auto; }
 .sidebar-user { margin-top: auto; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 14px 9px 0; border-top: 1px solid var(--line); }
 .sidebar-user strong, .sidebar-user small { display: block; }
 .sidebar-user strong { font-size: 12px; text-transform: capitalize; }
@@ -615,6 +620,11 @@ textarea:focus { border-color: var(--green); }
   .mobile-nav button { border: 0; background: transparent; color: var(--muted); display: grid; justify-items: center; gap: 3px; font-size: 9px; }
   .mobile-nav svg { width: 20px; }
   .mobile-nav button.active { color: var(--green); }
+  .mobile-nav-icon { position: relative; display: grid; place-items: center; }
+  .mobile-nav-icon .nav-unread-badge {
+    position: absolute; left: 13px; top: -7px; min-width: 18px; height: 18px;
+    padding: 0 5px; border: 2px solid white; font-size: 8px;
+  }
   .communication-page {
     height: calc(100dvh - 68px - env(safe-area-inset-bottom, 0px));
     min-height: 0; padding: 14px 0 0;

@@ -63,7 +63,7 @@ test("ships installable PWA files with the current cache policy", async () => {
 
   assert.match(manifest, /"display"\s*:\s*"standalone"/);
   assert.match(manifest, /Norte Sul/);
-  assert.match(serviceWorker, /norte-sul-vendas-v4/);
+  assert.match(serviceWorker, /norte-sul-vendas-v5/);
   assert.match(manifest, /app-icon-192\.png/);
   assert.match(manifest, /app-icon-512\.png/);
   assert.match(manifest, /app-icon-maskable-512\.png/);
@@ -72,6 +72,8 @@ test("ships installable PWA files with the current cache policy", async () => {
   assert.match(serviceWorker, /html\.matchAll/);
   assert.match(serviceWorker, /cache\.addAll/);
   assert.match(serviceWorker, /response\.ok/);
+  assert.match(serviceWorker, /notificationclick/);
+  assert.match(serviceWorker, /OPEN_COMMUNICATION/);
 });
 
 test("keeps a seller-scoped offline load and manual refresh screen", async () => {
@@ -113,6 +115,10 @@ test("provides authenticated shared communication between Sankhya users", async 
   assert.doesNotMatch(appSource, /Equipe Norte Sul/);
   assert.match(appSource, /Pesquisar usuário/);
   assert.match(appSource, /setInterval\(\(\) => void loadMessages/);
+  assert.match(appSource, /unreadMessages/);
+  assert.match(appSource, /showNotification/);
+  assert.match(appSource, /Notification\.requestPermission/);
+  assert.match(appSource, /nav-unread-badge/);
   assert.match(usersSource, /FROM TSIUSU/);
   assert.match(usersSource, /requireSession/);
   assert.match(conversationsSource, /createConversation/);
