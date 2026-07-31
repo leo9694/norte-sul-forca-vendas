@@ -15,9 +15,9 @@ O início local recompila automaticamente quando houver alterações no código.
 
 ## Produção
 
-Os arquivos em `deploy/` mantêm o aplicativo isolado dos demais serviços da VPS:
+Os arquivos de produção mantêm o aplicativo isolado dos demais serviços da VPS:
 
-- processo dedicado no `systemd`;
+- processo dedicado no PM2;
 - porta interna `3107`, acessível somente em `127.0.0.1`;
 - virtual host exclusivo `teste.nortesulsementes.com` no Nginx;
 - segredos mantidos fora do Git em `.env.treinamento`.
@@ -35,13 +35,12 @@ sudo -u forcavendas /opt/norte-sul-node/bin/npm ci --include=dev
 sudo -u forcavendas /opt/norte-sul-node/bin/npm run build
 ```
 
-Instale o serviço e valide-o antes de configurar o domínio:
+Inicie no PM2 e valide antes de configurar o domínio:
 
 ```bash
-sudo cp deploy/norte-sul-forca-vendas.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now norte-sul-forca-vendas
-sudo systemctl status norte-sul-forca-vendas --no-pager
+pm2 start ecosystem.config.cjs --only norte-sul-forca-vendas
+pm2 save
+pm2 status norte-sul-forca-vendas
 curl -I http://127.0.0.1:3107
 ```
 
@@ -62,6 +61,7 @@ cd /opt/norte-sul-forca-vendas
 sudo -u forcavendas git pull --ff-only
 sudo -u forcavendas /opt/norte-sul-node/bin/npm ci --include=dev
 sudo -u forcavendas /opt/norte-sul-node/bin/npm run build
-sudo systemctl restart norte-sul-forca-vendas
-sudo systemctl status norte-sul-forca-vendas --no-pager
+pm2 restart norte-sul-forca-vendas --update-env
+pm2 save
+pm2 status norte-sul-forca-vendas
 ```
