@@ -5,7 +5,7 @@ import net from "node:net";
 import path from "node:path";
 
 const publicPort = Number(process.env.PORT || 3000);
-const publicHost = "0.0.0.0";
+const publicHost = process.env.HOST || "0.0.0.0";
 const loopback = "127.0.0.1";
 const localUrl = `http://localhost:${publicPort}`;
 const projectRoot = process.cwd();

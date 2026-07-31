@@ -1,0 +1,24 @@
+[Unit]
+Description=Norte Sul Forca de Vendas
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=forcavendas
+Group=forcavendas
+WorkingDirectory=/opt/norte-sul-forca-vendas
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/norte-sul-forca-vendas
+
+[Install]
+WantedBy=multi-user.target
