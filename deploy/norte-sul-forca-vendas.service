@@ -8,8 +8,8 @@ Type=simple
 User=forcavendas
 Group=forcavendas
 WorkingDirectory=/opt/norte-sul-forca-vendas
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/npm start
+Environment=PATH=/opt/norte-sul-node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/norte-sul-node/bin/npm start
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20

@@ -31,8 +31,8 @@ sudo ss -ltnp | grep ':3107 ' || true
 O DNS de `teste.nortesulsementes.com` deve apontar para a VPS. Depois de clonar o repositório em `/opt/norte-sul-forca-vendas`, instale e compile:
 
 ```bash
-sudo npm ci --include=dev
-sudo npm run build
+sudo -u forcavendas /opt/norte-sul-node/bin/npm ci --include=dev
+sudo -u forcavendas /opt/norte-sul-node/bin/npm run build
 ```
 
 Instale o serviço e valide-o antes de configurar o domínio:
@@ -60,8 +60,8 @@ sudo certbot --nginx -d teste.nortesulsementes.com
 ```bash
 cd /opt/norte-sul-forca-vendas
 sudo -u forcavendas git pull --ff-only
-sudo -u forcavendas npm ci --include=dev
-sudo -u forcavendas npm run build
+sudo -u forcavendas /opt/norte-sul-node/bin/npm ci --include=dev
+sudo -u forcavendas /opt/norte-sul-node/bin/npm run build
 sudo systemctl restart norte-sul-forca-vendas
 sudo systemctl status norte-sul-forca-vendas --no-pager
 ```
