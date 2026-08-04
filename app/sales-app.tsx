@@ -83,14 +83,14 @@ type ProductGroup = {
 };
 type ProductBrand = { MARCA: string };
 type OrderPhase = "header" | "products" | "review";
-type AppScreen = "orders" | "new" | "clients" | "communication" | "more";
+type AppScreen = "home" | "general-sales" | "orders" | "new" | "clients" | "communication" | "more";
 type AppHistoryView = AppScreen | "client-picker" | "logout";
 type AppHistoryState = {
   norteSulVendas: true;
   view: AppHistoryView;
   baseScreen?: Exclude<AppScreen, "new">;
   phase?: OrderPhase;
-  dialog?: "send" | "groups" | "brand";
+  dialog?: "send" | "groups" | "brand" | "dashboard-detail";
   conversationId?: string;
 };
 type OrderDraft = {
@@ -131,6 +131,65 @@ type SankhyaChatUser = {
   CODVEND?: number | null;
 };
 
+type DashboardData = {
+  summary: {
+    SALES_VALUE: number;
+    ORDER_COUNT: number;
+    AVG_TICKET: number;
+    CLIENT_COUNT: number;
+    PENDING_VALUE: number;
+  };
+  dailySales: Array<{ SALE_DATE: string; SALES_VALUE: number; ORDER_COUNT: number }>;
+  topProducts: Array<{ CODPROD: number; DESCRPROD: string; QUANTITY: number; SALES_VALUE: number }>;
+  topClients: Array<{ CODPARC: number; NOMEPARC: string; SALES_VALUE: number; ORDER_COUNT: number }>;
+  clientPortfolio: {
+    NEW_CLIENTS: number;
+    RECURRING_CLIENTS: number;
+    REACTIVATED_CLIENTS: number;
+    INACTIVE_30: number;
+    INACTIVE_60: number;
+    INACTIVE_90: number;
+  };
+  salesByGroup: Array<{ CODGRUPOPROD: number; DESCRGRUPOPROD: string; SALES_VALUE: number }>;
+};
+type DashboardDetailType = "day" | "products" | "groupProducts" | "clients" | "newClients" | "recurringClients" | "reactivatedClients" | "inactiveClients";
+type DashboardDetailSelection = { type: DashboardDetailType; date?: string; groupId?: number; groupName?: string };
+type DashboardSeller = { CODVEND: number; APELIDO: string };
+type GeneralSalesCompany = { CODEMP: number; NOMEFANTASIA: string };
+type GeneralSalesData = {
+  summary: {
+    SALES_VALUE: number;
+    ORDER_COUNT: number;
+    AVG_TICKET: number;
+    CLIENT_COUNT: number;
+    SELLER_COUNT: number;
+    OPEN_ORDER_COUNT: number;
+    OPEN_VALUE: number;
+  };
+  companies: Array<GeneralSalesCompany & {
+    SALES_VALUE: number;
+    ORDER_COUNT: number;
+    AVG_TICKET: number;
+    CLIENT_COUNT: number;
+    SELLER_COUNT: number;
+    OPEN_ORDER_COUNT: number;
+    OPEN_VALUE: number;
+  }>;
+  sellers: Array<{ CODVEND: number; APELIDO: string; SALES_VALUE: number; ORDER_COUNT: number; CLIENT_COUNT: number; AVG_TICKET: number }>;
+  groups: Array<{ CODGRUPOPROD: number; DESCRGRUPOPROD: string; SALES_VALUE: number; QUANTITY: number }>;
+  monthly: Array<{ SALE_MONTH: string; SALES_VALUE: number; ORDER_COUNT: number }>;
+};
+const dashboardDetailKinds: Record<DashboardDetailType, string> = {
+  day: "dashboardDay",
+  products: "dashboardProducts",
+  groupProducts: "dashboardGroupProducts",
+  clients: "dashboardClients",
+  newClients: "dashboardNewClients",
+  recurringClients: "dashboardRecurringClients",
+  reactivatedClients: "dashboardReactivatedClients",
+  inactiveClients: "dashboardInactiveClients",
+};
+
 const OFFLINE_SESSION_KEY = "norte-sul-vendas:offline-session-enabled";
 
 type InstallPromptEvent = Event & {
@@ -149,6 +208,621 @@ type Client = ApiRow & {
 
 const money = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+
+const compactMoney = (value: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", notation: "compact", maximumFractionDigits: 1 }).format(value);
+
+const inputDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const daysAgo = (days: number) => {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  return inputDate(date);
+};
+
+const currentMonthStart = () => {
+  const today = new Date();
+  return inputDate(new Date(today.getFullYear(), today.getMonth(), 1));
+};
+
+const displayPeriodDate = (value: string) => value.split("-").reverse().join("/");
+
+const filterOrdersByPeriod = (rows: ApiRow[], dateFrom: string, dateTo: string) =>
+  rows.filter((order) => {
+    const raw = String(order.DTNEG ?? "");
+    const date = /^\d{8}/.test(raw)
+      ? `${raw.slice(4, 8)}-${raw.slice(2, 4)}-${raw.slice(0, 2)}`
+      : raw.slice(0, 10);
+    return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
+  });
+
+const reportColors = ["#087a4d", "#23a46d", "#6abc8d", "#d7b348", "#e17b45", "#4c84b8", "#8c6bb1", "#69766f"];
+
+function salesGroupPie(groups: DashboardData["salesByGroup"]) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 720;
+  canvas.height = 720;
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+  const values = groups.map((item) => Math.max(0, Number(item.SALES_VALUE)));
+  const total = values.reduce((sum, value) => sum + value, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  if (!total) {
+    context.fillStyle = "#e8efeb";
+    context.beginPath();
+    context.arc(360, 360, 290, 0, Math.PI * 2);
+    context.fill();
+  } else {
+    let angle = -Math.PI / 2;
+    values.forEach((value, index) => {
+      const next = angle + (value / total) * Math.PI * 2;
+      context.fillStyle = reportColors[index % reportColors.length];
+      context.beginPath();
+      context.moveTo(360, 360);
+      context.arc(360, 360, 290, angle, next);
+      context.closePath();
+      context.fill();
+      angle = next;
+    });
+  }
+  context.fillStyle = "white";
+  context.beginPath();
+  context.arc(360, 360, 135, 0, Math.PI * 2);
+  context.fill();
+  return canvas.toDataURL("image/png");
+}
+
+async function imageDataUrl(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) return "";
+  const blob = await response.blob();
+  return new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function downloadSalesReport(input: {
+  dashboard: DashboardData;
+  sellerName: string;
+  periodLabel: string;
+  dateFrom: string;
+  dateTo: string;
+  products: ApiRow[];
+  clients: ApiRow[];
+}) {
+  const { jsPDF } = await import("jspdf");
+  const { dashboard, sellerName, periodLabel, products, clients } = input;
+  const document = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const pageWidth = document.internal.pageSize.getWidth();
+  const pageHeight = document.internal.pageSize.getHeight();
+  const margin = 14;
+  const contentWidth = pageWidth - margin * 2;
+  const green = [7, 122, 77] as const;
+  const darkGreen = [8, 74, 49] as const;
+  const ink = [26, 42, 34] as const;
+  const muted = [103, 119, 110] as const;
+  const line = [221, 231, 225] as const;
+  const soft = [237, 248, 242] as const;
+  let y = 14;
+
+  const pageHeader = () => {
+    document.setFont("helvetica", "bold");
+    document.setFontSize(8);
+    document.setTextColor(...green);
+    document.text("NORTE SUL SEMENTES - FORCA DE VENDAS", margin, 11);
+    document.setDrawColor(...line);
+    document.line(margin, 14, pageWidth - margin, 14);
+    y = 20;
+  };
+  const newPage = () => {
+    document.addPage();
+    pageHeader();
+  };
+  const ensureSpace = (height: number) => {
+    if (y + height > pageHeight - 16) newPage();
+  };
+  const sectionTitle = (title: string, subtitle?: string) => {
+    ensureSpace(subtitle ? 18 : 13);
+    document.setFont("helvetica", "bold");
+    document.setFontSize(12);
+    document.setTextColor(...ink);
+    document.text(title, margin, y);
+    y += 5;
+    if (subtitle) {
+      document.setFont("helvetica", "normal");
+      document.setFontSize(7.5);
+      document.setTextColor(...muted);
+      document.text(subtitle, margin, y);
+      y += 5;
+    }
+    document.setDrawColor(...line);
+    document.line(margin, y, pageWidth - margin, y);
+    y += 7;
+  };
+  const table = (title: string, headers: string[], widths: number[], rows: Array<Array<string | number>>) => {
+    sectionTitle(title, `${rows.length} registros ordenados por valor faturado.`);
+    const drawHeader = () => {
+      ensureSpace(10);
+      document.setFillColor(...darkGreen);
+      document.roundedRect(margin, y, contentWidth, 8, 2, 2, "F");
+      document.setFont("helvetica", "bold");
+      document.setFontSize(7);
+      document.setTextColor(255, 255, 255);
+      let x = margin + 3;
+      headers.forEach((header, index) => {
+        document.text(header, index === headers.length - 1 ? x + widths[index] - 3 : x, y + 5.2, { align: index === headers.length - 1 ? "right" : "left" });
+        x += widths[index];
+      });
+      y += 9;
+    };
+    drawHeader();
+    rows.forEach((row, rowIndex) => {
+      const wrapped = row.map((cell, index) => document.splitTextToSize(String(cell), Math.max(8, widths[index] - 6)) as string[]);
+      const rowHeight = Math.max(8, Math.max(...wrapped.map((lines) => lines.length)) * 3.6 + 3);
+      if (y + rowHeight > pageHeight - 16) {
+        newPage();
+        drawHeader();
+      }
+      if (rowIndex % 2 === 0) {
+        document.setFillColor(247, 250, 248);
+        document.rect(margin, y, contentWidth, rowHeight, "F");
+      }
+      document.setFont("helvetica", "normal");
+      document.setFontSize(7.2);
+      document.setTextColor(...ink);
+      let x = margin + 3;
+      wrapped.forEach((cellLines, index) => {
+        document.text(cellLines, index === wrapped.length - 1 ? x + widths[index] - 3 : x, y + 5, { align: index === wrapped.length - 1 ? "right" : "left" });
+        x += widths[index];
+      });
+      document.setDrawColor(...line);
+      document.line(margin, y + rowHeight, pageWidth - margin, y + rowHeight);
+      y += rowHeight;
+    });
+    y += 7;
+  };
+
+  document.setFillColor(...darkGreen);
+  document.rect(0, 0, pageWidth, 54, "F");
+  const logo = await imageDataUrl("/brand-logo.png").catch(() => "");
+  if (logo) document.addImage(logo, "PNG", margin, 10, 28, 28, undefined, "FAST");
+  document.setFont("helvetica", "bold");
+  document.setFontSize(20);
+  document.setTextColor(255, 255, 255);
+  document.text("Relatorio de vendas", logo ? 48 : margin, 20);
+  document.setFontSize(10);
+  document.setFont("helvetica", "normal");
+  document.text(`Vendedor: ${sellerName}`, logo ? 48 : margin, 28);
+  document.text(`Periodo: ${periodLabel}`, logo ? 48 : margin, 34);
+  document.setFontSize(7.5);
+  document.setTextColor(200, 231, 216);
+  document.text(`Gerado em ${new Date().toLocaleString("pt-BR")}`, logo ? 48 : margin, 41);
+  y = 64;
+
+  const cards = [
+    ["Faturamento", money(Number(dashboard.summary.SALES_VALUE))],
+    ["Pedidos faturados", Number(dashboard.summary.ORDER_COUNT).toLocaleString("pt-BR")],
+    ["Ticket medio", money(Number(dashboard.summary.AVG_TICKET))],
+    ["Clientes atendidos", Number(dashboard.summary.CLIENT_COUNT).toLocaleString("pt-BR")],
+  ];
+  const cardGap = 3;
+  const cardWidth = (contentWidth - cardGap * 3) / 4;
+  cards.forEach(([label, value], index) => {
+    const x = margin + index * (cardWidth + cardGap);
+    document.setFillColor(...soft);
+    document.roundedRect(x, y, cardWidth, 22, 3, 3, "F");
+    document.setFont("helvetica", "normal");
+    document.setFontSize(6.5);
+    document.setTextColor(...muted);
+    document.text(label, x + 4, y + 7);
+    document.setFont("helvetica", "bold");
+    document.setFontSize(index === 0 || index === 2 ? 10 : 13);
+    document.setTextColor(...green);
+    document.text(value, x + 4, y + 16);
+  });
+  y += 33;
+
+  sectionTitle("Participacao por grupo de produto", "Distribuicao do valor faturado entre os grupos vendidos.");
+  const pieGroups = dashboard.salesByGroup.slice(0, 7);
+  const otherValue = dashboard.salesByGroup.slice(7).reduce((sum, item) => sum + Number(item.SALES_VALUE), 0);
+  const chartGroups = otherValue > 0
+    ? [...pieGroups, { CODGRUPOPROD: -1, DESCRGRUPOPROD: "OUTROS", SALES_VALUE: otherValue }]
+    : pieGroups;
+  const pie = salesGroupPie(chartGroups);
+  if (pie) document.addImage(pie, "PNG", margin + 3, y, 55, 55, undefined, "FAST");
+  const groupTotal = dashboard.salesByGroup.reduce((sum, item) => sum + Number(item.SALES_VALUE), 0);
+  chartGroups.forEach((group, index) => {
+    const legendY = y + 4 + index * 6.3;
+    document.setFillColor(reportColors[index % reportColors.length]);
+    document.circle(margin + 66, legendY - 1, 1.7, "F");
+    document.setFont("helvetica", "bold");
+    document.setFontSize(7);
+    document.setTextColor(...ink);
+    document.text(String(group.DESCRGRUPOPROD).slice(0, 30), margin + 70, legendY);
+    const share = groupTotal ? (Number(group.SALES_VALUE) / groupTotal) * 100 : 0;
+    document.setFont("helvetica", "normal");
+    document.setTextColor(...muted);
+    document.text(`${share.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%  ${money(Number(group.SALES_VALUE))}`, pageWidth - margin, legendY, { align: "right" });
+  });
+  y += 63;
+
+  table(
+    "Vendas por grupo de produto",
+    ["Grupo", "Participacao", "Valor faturado"],
+    [94, 38, 50],
+    dashboard.salesByGroup.map((group) => [
+      String(group.DESCRGRUPOPROD),
+      `${(groupTotal ? Number(group.SALES_VALUE) / groupTotal * 100 : 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`,
+      money(Number(group.SALES_VALUE)),
+    ]),
+  );
+
+  table(
+    "Evolucao diaria das vendas",
+    ["Data", "Pedidos", "Valor faturado"],
+    [78, 54, 50],
+    dashboard.dailySales.map((day) => [
+      day.SALE_DATE,
+      Number(day.ORDER_COUNT).toLocaleString("pt-BR"),
+      money(Number(day.SALES_VALUE)),
+    ]),
+  );
+
+  table(
+    "Top 10 produtos mais vendidos",
+    ["Produto", "Quantidade", "Valor faturado"],
+    [104, 28, 50],
+    products
+      .slice()
+      .sort((left, right) => Number(right.SALES_VALUE) - Number(left.SALES_VALUE))
+      .slice(0, 10)
+      .map((product) => [
+        `${product.ENTITY_ID ?? product.CODPROD} - ${product.ENTITY_NAME ?? product.DESCRPROD}`,
+        Number(product.QUANTITY || 0).toLocaleString("pt-BR"),
+        money(Number(product.SALES_VALUE || 0)),
+      ]),
+  );
+
+  table(
+    "Clientes do periodo",
+    ["Cliente", "Pedidos", "Valor faturado"],
+    [104, 28, 50],
+    clients
+      .slice()
+      .sort((left, right) => Number(right.SALES_VALUE) - Number(left.SALES_VALUE))
+      .map((client) => [
+        `${client.ENTITY_ID ?? client.CODPARC} - ${client.ENTITY_NAME ?? client.NOMEPARC}`,
+        Number(client.ORDER_COUNT || 0).toLocaleString("pt-BR"),
+        money(Number(client.SALES_VALUE || 0)),
+      ]),
+  );
+
+  sectionTitle("Relacionamento comercial", "Resumo da carteira no periodo selecionado.");
+  const portfolioRows = [
+    ["Clientes novos", dashboard.clientPortfolio.NEW_CLIENTS],
+    ["Clientes recorrentes", dashboard.clientPortfolio.RECURRING_CLIENTS],
+    ["Clientes reativados", dashboard.clientPortfolio.REACTIVATED_CLIENTS],
+    ["Sem comprar ha 30 dias", dashboard.clientPortfolio.INACTIVE_30],
+    ["Sem comprar ha 60 dias", dashboard.clientPortfolio.INACTIVE_60],
+    ["Sem comprar ha 90 dias", dashboard.clientPortfolio.INACTIVE_90],
+  ];
+  portfolioRows.forEach(([label, value], index) => {
+    ensureSpace(10);
+    const x = index % 2 === 0 ? margin : margin + contentWidth / 2 + 2;
+    if (index % 2 === 0 && index > 0) y += 12;
+    document.setFillColor(247, 250, 248);
+    document.roundedRect(x, y, contentWidth / 2 - 2, 10, 2, 2, "F");
+    document.setFont("helvetica", "normal");
+    document.setFontSize(7.5);
+    document.setTextColor(...muted);
+    document.text(String(label), x + 4, y + 6.3);
+    document.setFont("helvetica", "bold");
+    document.setFontSize(10);
+    document.setTextColor(...green);
+    document.text(Number(value).toLocaleString("pt-BR"), x + contentWidth / 2 - 7, y + 6.5, { align: "right" });
+  });
+
+  const pageCount = document.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    document.setPage(page);
+    document.setDrawColor(...line);
+    document.line(margin, pageHeight - 11, pageWidth - margin, pageHeight - 11);
+    document.setFont("helvetica", "normal");
+    document.setFontSize(7);
+    document.setTextColor(...muted);
+    document.text("Norte Sul Sementes - Relatorio comercial", margin, pageHeight - 6);
+    document.text(`Pagina ${page} de ${pageCount}`, pageWidth - margin, pageHeight - 6, { align: "right" });
+  }
+
+  const fileSeller = sellerName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+  document.save(`relatorio-vendas-${fileSeller || "vendedor"}-${input.dateFrom}-a-${input.dateTo}.pdf`);
+}
+
+type DashboardPanelReport = "evolution" | "products" | "groups" | "clients" | "portfolio";
+
+async function downloadDashboardPanelReport(input: {
+  kind: DashboardPanelReport;
+  dashboard: DashboardData;
+  sellerName: string;
+  periodLabel: string;
+  dateFrom: string;
+  dateTo: string;
+  rows?: ApiRow[];
+  portfolioRows?: Array<{ segment: string; rows: ApiRow[] }>;
+}) {
+  const { jsPDF } = await import("jspdf");
+  const { kind, dashboard, sellerName, periodLabel } = input;
+  const titles: Record<DashboardPanelReport, string> = {
+    evolution: "Evolucao das vendas",
+    products: "Mix de vendas",
+    groups: "Vendas por grupo de produto",
+    clients: "Relacionamento com clientes",
+    portfolio: "Carteira de clientes",
+  };
+  const fileNames: Record<DashboardPanelReport, string> = {
+    evolution: "evolucao-vendas",
+    products: "mix-vendas",
+    groups: "grupos-produtos",
+    clients: "clientes-periodo",
+    portfolio: "carteira-clientes",
+  };
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 14;
+  const contentWidth = pageWidth - margin * 2;
+  const green = [7, 122, 77] as const;
+  const darkGreen = [8, 74, 49] as const;
+  const ink = [26, 42, 34] as const;
+  const muted = [103, 119, 110] as const;
+  const line = [221, 231, 225] as const;
+  let y = 62;
+
+  const drawPageHeading = (firstPage = false) => {
+    if (!firstPage) {
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.setTextColor(...green);
+      pdf.text(`NORTE SUL SEMENTES - ${titles[kind].toUpperCase()}`, margin, 11);
+      pdf.setDrawColor(...line);
+      pdf.line(margin, 14, pageWidth - margin, 14);
+      y = 21;
+    }
+  };
+  const addPage = () => {
+    pdf.addPage();
+    drawPageHeading();
+  };
+  const ensureSpace = (height: number) => {
+    if (y + height > pageHeight - 16) addPage();
+  };
+  const section = (title: string, subtitle?: string) => {
+    ensureSpace(subtitle ? 18 : 13);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(12);
+    pdf.setTextColor(...ink);
+    pdf.text(title, margin, y);
+    y += 5;
+    if (subtitle) {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(...muted);
+      pdf.text(subtitle, margin, y);
+      y += 5;
+    }
+    pdf.setDrawColor(...line);
+    pdf.line(margin, y, pageWidth - margin, y);
+    y += 7;
+  };
+  const drawTable = (headers: string[], widths: number[], rows: Array<Array<string | number>>) => {
+    const header = () => {
+      ensureSpace(10);
+      pdf.setFillColor(...darkGreen);
+      pdf.roundedRect(margin, y, contentWidth, 8, 2, 2, "F");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      pdf.setTextColor(255, 255, 255);
+      let x = margin + 3;
+      headers.forEach((label, index) => {
+        pdf.text(label, index === headers.length - 1 ? x + widths[index] - 3 : x, y + 5.2, { align: index === headers.length - 1 ? "right" : "left" });
+        x += widths[index];
+      });
+      y += 9;
+    };
+    header();
+    rows.forEach((row, rowIndex) => {
+      const wrapped = row.map((cell, index) => pdf.splitTextToSize(String(cell), Math.max(8, widths[index] - 6)) as string[]);
+      const height = Math.max(8, Math.max(...wrapped.map((value) => value.length)) * 3.6 + 3);
+      if (y + height > pageHeight - 16) {
+        addPage();
+        header();
+      }
+      if (rowIndex % 2 === 0) {
+        pdf.setFillColor(247, 250, 248);
+        pdf.rect(margin, y, contentWidth, height, "F");
+      }
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7.2);
+      pdf.setTextColor(...ink);
+      let x = margin + 3;
+      wrapped.forEach((cell, index) => {
+        pdf.text(cell, index === wrapped.length - 1 ? x + widths[index] - 3 : x, y + 5, { align: index === wrapped.length - 1 ? "right" : "left" });
+        x += widths[index];
+      });
+      pdf.setDrawColor(...line);
+      pdf.line(margin, y + height, pageWidth - margin, y + height);
+      y += height;
+    });
+    y += 7;
+  };
+  const metricCards = (cards: Array<[string, string]>) => {
+    const gap = 4;
+    const width = (contentWidth - gap * (cards.length - 1)) / cards.length;
+    cards.forEach(([label, value], index) => {
+      const x = margin + index * (width + gap);
+      pdf.setFillColor(237, 248, 242);
+      pdf.roundedRect(x, y, width, 21, 3, 3, "F");
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(6.5);
+      pdf.setTextColor(...muted);
+      pdf.text(label, x + 4, y + 7);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(value.length > 17 ? 9 : 12);
+      pdf.setTextColor(...green);
+      pdf.text(value, x + 4, y + 15.5);
+    });
+    y += 31;
+  };
+
+  pdf.setFillColor(...darkGreen);
+  pdf.rect(0, 0, pageWidth, 50, "F");
+  const logo = await imageDataUrl("/brand-logo.png").catch(() => "");
+  if (logo) pdf.addImage(logo, "PNG", margin, 9, 25, 25, undefined, "FAST");
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(19);
+  pdf.setTextColor(255, 255, 255);
+  pdf.text(titles[kind], logo ? 45 : margin, 19);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(9);
+  pdf.text(`Vendedor: ${sellerName}`, logo ? 45 : margin, 27);
+  pdf.text(`Periodo: ${periodLabel}`, logo ? 45 : margin, 33);
+  pdf.setFontSize(7);
+  pdf.setTextColor(200, 231, 216);
+  pdf.text(`Gerado em ${new Date().toLocaleString("pt-BR")}`, logo ? 45 : margin, 40);
+
+  if (kind === "evolution") {
+    metricCards([
+      ["Faturamento", money(Number(dashboard.summary.SALES_VALUE))],
+      ["Pedidos", Number(dashboard.summary.ORDER_COUNT).toLocaleString("pt-BR")],
+      ["Dias com vendas", dashboard.dailySales.length.toLocaleString("pt-BR")],
+    ]);
+    section("Grafico vertical por dia", "Cada linha apresenta a data, os pedidos e o valor faturado sem abreviacoes.");
+    const max = Math.max(...dashboard.dailySales.map((item) => Number(item.SALES_VALUE)), 1);
+    dashboard.dailySales.forEach((day) => {
+      ensureSpace(13);
+      const barX = margin + 31;
+      const barWidth = 91;
+      const valueWidth = Math.max(2, Number(day.SALES_VALUE) / max * barWidth);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(...ink);
+      pdf.text(day.SALE_DATE, margin, y + 4.3);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(6.2);
+      pdf.setTextColor(...muted);
+      pdf.text(`${Number(day.ORDER_COUNT).toLocaleString("pt-BR")} ${Number(day.ORDER_COUNT) === 1 ? "pedido" : "pedidos"}`, margin, y + 8.2);
+      pdf.setFillColor(232, 239, 235);
+      pdf.roundedRect(barX, y + 1.5, barWidth, 7, 2, 2, "F");
+      pdf.setFillColor(...green);
+      pdf.roundedRect(barX, y + 1.5, valueWidth, 7, 2, 2, "F");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(...green);
+      pdf.text(money(Number(day.SALES_VALUE)), pageWidth - margin, y + 5.8, { align: "right" });
+      pdf.setDrawColor(...line);
+      pdf.line(margin, y + 11, pageWidth - margin, y + 11);
+      y += 12.5;
+    });
+    y += 5;
+  }
+
+  if (kind === "products") {
+    const products = (input.rows ?? []).slice().sort((left, right) => Number(right.SALES_VALUE) - Number(left.SALES_VALUE));
+    metricCards([
+      ["Produtos vendidos", products.length.toLocaleString("pt-BR")],
+      ["Unidades vendidas", products.reduce((sum, item) => sum + Number(item.QUANTITY || 0), 0).toLocaleString("pt-BR")],
+      ["Valor total", money(products.reduce((sum, item) => sum + Number(item.SALES_VALUE || 0), 0))],
+    ]);
+    section("Lista completa de produtos vendidos", "Todos os produtos ordenados pelo valor faturado.");
+    drawTable(["Produto", "Quantidade", "Valor faturado"], [104, 28, 50], products.map((product) => [`${product.ENTITY_ID ?? product.CODPROD} - ${product.ENTITY_NAME ?? product.DESCRPROD}`, Number(product.QUANTITY || 0).toLocaleString("pt-BR"), money(Number(product.SALES_VALUE || 0))]));
+  }
+
+  if (kind === "groups") {
+    const groups = dashboard.salesByGroup.slice().sort((left, right) => Number(right.SALES_VALUE) - Number(left.SALES_VALUE));
+    const total = groups.reduce((sum, item) => sum + Number(item.SALES_VALUE), 0);
+    metricCards([
+      ["Faturamento", money(total)],
+      ["Grupos vendidos", groups.length.toLocaleString("pt-BR")],
+      ["Maior grupo", groups[0]?.DESCRGRUPOPROD || "Sem vendas"],
+    ]);
+    section("Participacao por grupo", "Distribuicao percentual do faturamento.");
+    const firstGroups = groups.slice(0, 7);
+    const other = groups.slice(7).reduce((sum, item) => sum + Number(item.SALES_VALUE), 0);
+    const chartGroups = other > 0 ? [...firstGroups, { CODGRUPOPROD: -1, DESCRGRUPOPROD: "OUTROS", SALES_VALUE: other }] : firstGroups;
+    const pie = salesGroupPie(chartGroups);
+    if (pie) pdf.addImage(pie, "PNG", margin + 4, y, 54, 54, undefined, "FAST");
+    chartGroups.forEach((group, index) => {
+      const legendY = y + 4 + index * 6.2;
+      pdf.setFillColor(reportColors[index % reportColors.length]);
+      pdf.circle(margin + 66, legendY - 1, 1.7, "F");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      pdf.setTextColor(...ink);
+      pdf.text(String(group.DESCRGRUPOPROD).slice(0, 27), margin + 70, legendY);
+      pdf.setFont("helvetica", "normal");
+      pdf.setTextColor(...muted);
+      pdf.text(`${(total ? Number(group.SALES_VALUE) / total * 100 : 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`, pageWidth - margin, legendY, { align: "right" });
+    });
+    y += 62;
+    drawTable(["Grupo", "Participacao", "Valor faturado"], [94, 38, 50], groups.map((group) => [group.DESCRGRUPOPROD, `${(total ? Number(group.SALES_VALUE) / total * 100 : 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`, money(Number(group.SALES_VALUE))]));
+  }
+
+  if (kind === "clients") {
+    const clients = (input.rows ?? []).slice().sort((left, right) => Number(right.SALES_VALUE) - Number(left.SALES_VALUE));
+    metricCards([
+      ["Clientes atendidos", clients.length.toLocaleString("pt-BR")],
+      ["Pedidos", clients.reduce((sum, item) => sum + Number(item.ORDER_COUNT || 0), 0).toLocaleString("pt-BR")],
+      ["Valor faturado", money(clients.reduce((sum, item) => sum + Number(item.SALES_VALUE || 0), 0))],
+    ]);
+    section("Clientes do periodo", "Relacionamento ordenado pelo valor faturado.");
+    drawTable(["Cliente", "Pedidos", "Valor faturado"], [104, 28, 50], clients.map((client) => [`${client.ENTITY_ID ?? client.CODPARC} - ${client.ENTITY_NAME ?? client.NOMEPARC}`, Number(client.ORDER_COUNT || 0).toLocaleString("pt-BR"), money(Number(client.SALES_VALUE || 0))]));
+  }
+
+  if (kind === "portfolio") {
+    metricCards([
+      ["Novos", Number(dashboard.clientPortfolio.NEW_CLIENTS).toLocaleString("pt-BR")],
+      ["Recorrentes", Number(dashboard.clientPortfolio.RECURRING_CLIENTS).toLocaleString("pt-BR")],
+      ["Reativados", Number(dashboard.clientPortfolio.REACTIVATED_CLIENTS).toLocaleString("pt-BR")],
+      ["Atencao 30+", Number(dashboard.clientPortfolio.INACTIVE_30).toLocaleString("pt-BR")],
+    ]);
+    const portfolioRows = input.portfolioRows ?? [];
+    if (!portfolioRows.some((segment) => segment.rows.length)) {
+      section("Resumo da carteira", "Os indicadores acima representam os dados disponiveis neste aparelho.");
+    }
+    portfolioRows.forEach((segment) => {
+      if (!segment.rows.length) return;
+      section(segment.segment, `${segment.rows.length} clientes neste segmento.`);
+      drawTable(["Cliente", "Data de referencia", "Informacao"], [106, 38, 38], segment.rows.map((client) => [
+        `${client.ENTITY_ID} - ${client.ENTITY_NAME}`,
+        String(client.REFERENCE_DATE || client.LAST_PURCHASE || "Sem compra"),
+        client.DAYS_WITHOUT_PURCHASE != null ? `${Number(client.DAYS_WITHOUT_PURCHASE).toLocaleString("pt-BR")} dias` : `${Number(client.ORDER_COUNT || 0).toLocaleString("pt-BR")} pedidos`,
+      ]));
+    });
+  }
+
+  const pages = pdf.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    pdf.setPage(page);
+    pdf.setDrawColor(...line);
+    pdf.line(margin, pageHeight - 11, pageWidth - margin, pageHeight - 11);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    pdf.setTextColor(...muted);
+    pdf.text(`Norte Sul Sementes - ${titles[kind]}`, margin, pageHeight - 6);
+    pdf.text(`Pagina ${page} de ${pages}`, pageWidth - margin, pageHeight - 6, { align: "right" });
+  }
+  const sellerFile = sellerName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+  pdf.save(`relatorio-${fileNames[kind]}-${sellerFile || "vendedor"}-${input.dateFrom}-a-${input.dateTo}.pdf`);
+}
 
 const normalizeProductSearch = (value: unknown) =>
   String(value ?? "")
@@ -233,7 +907,7 @@ export function SalesApp() {
   const [userId, setUserId] = useState(0);
   const [sellerId, setSellerId] = useState(0);
   const [sellerName, setSellerName] = useState("");
-  const [screen, setScreen] = useState<AppScreen>("orders");
+  const [screen, setScreen] = useState<AppScreen>("home");
   const [orders, setOrders] = useState<ApiRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
@@ -253,6 +927,7 @@ export function SalesApp() {
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [toast, setToast] = useState("");
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [canMonitorSales, setCanMonitorSales] = useState(false);
 
   const applySnapshot = (snapshot: OfflineSnapshot, replaceOrders = true) => {
     setOfflineData(snapshot);
@@ -261,18 +936,9 @@ export function SalesApp() {
     setSellerId(snapshot.seller.sellerId);
     setSellerName(snapshot.seller.sellerName);
     setClients(snapshot.clients as Client[]);
-    if (replaceOrders) setOrders(snapshot.orders);
+    if (replaceOrders) setOrders(filterOrdersByPeriod(snapshot.orders, currentMonthStart(), inputDate(new Date())));
     setAuthenticated(true);
   };
-
-  const filterOfflineOrders = (rows: ApiRow[], dateFrom = "", dateTo = "") =>
-    rows.filter((order) => {
-      const raw = String(order.DTNEG ?? "");
-      const date = /^\d{8}/.test(raw)
-        ? `${raw.slice(4, 8)}-${raw.slice(2, 4)}-${raw.slice(0, 2)}`
-        : raw.slice(0, 10);
-      return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
-    });
 
   const pushHistoryView = (view: AppHistoryView, baseScreen?: Exclude<AppScreen, "new">) => {
     const state: AppHistoryState = { norteSulVendas: true, view, baseScreen };
@@ -307,6 +973,29 @@ export function SalesApp() {
   }, [userId]);
 
   useEffect(() => {
+    if (!authenticated || !userId) return;
+    const permissionKey = `norte-sul-vendas:general-sales:${userId}`;
+    if (!online) {
+      setCanMonitorSales(localStorage.getItem(permissionKey) === "true");
+      return;
+    }
+    let cancelled = false;
+    api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers")
+      .then(() => {
+        if (cancelled) return;
+        setCanMonitorSales(true);
+        localStorage.setItem(permissionKey, "true");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCanMonitorSales(false);
+        localStorage.removeItem(permissionKey);
+        if (screen === "general-sales") navigateTo("home");
+      });
+    return () => { cancelled = true; };
+  }, [authenticated, online, userId]);
+
+  useEffect(() => {
     if (
       authenticated
       && /android|iphone|ipad|ipod/i.test(navigator.userAgent)
@@ -338,7 +1027,7 @@ export function SalesApp() {
     };
   }, [authenticated, online, userId]);
 
-  const loadOrders = async (dateFrom = "", dateTo = "") => {
+  const loadOrders = async (dateFrom = currentMonthStart(), dateTo = inputDate(new Date())) => {
     setLoadingOrders(true);
     try {
       const params = new URLSearchParams({ kind: "orders" });
@@ -356,7 +1045,7 @@ export function SalesApp() {
         ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot());
       if (cached) {
         applySnapshot(cached, false);
-        setOrders(filterOfflineOrders(cached.orders, dateFrom, dateTo));
+        setOrders(filterOrdersByPeriod(cached.orders, dateFrom, dateTo));
         setToast("Exibindo os pedidos da última carga salva neste aparelho.");
       } else {
         setAuthenticated(false);
@@ -366,6 +1055,11 @@ export function SalesApp() {
       setLoadingOrders(false);
       setCheckingSession(false);
     }
+  };
+
+  const showOrders = () => {
+    navigateTo("orders");
+    void loadOrders();
   };
 
   const makeLoad = async (showSuccess = true) => {
@@ -471,16 +1165,16 @@ export function SalesApp() {
       );
       setScreen("communication");
     } else {
-      replaceHistoryView("orders");
+      replaceHistoryView("home");
     }
     const handleHistoryBack = (event: PopStateEvent) => {
       const state = event.state as AppHistoryState | null;
-      const view = state?.norteSulVendas ? state.view : "orders";
+      const view = state?.norteSulVendas ? state.view : "home";
       setLogoutConfirmOpen(view === "logout");
       setClientPickerOpen(view === "client-picker");
 
       if (view === "client-picker" || view === "logout") {
-        setScreen(state?.baseScreen ?? "orders");
+        setScreen(state?.baseScreen ?? "home");
         return;
       }
 
@@ -569,9 +1263,10 @@ export function SalesApp() {
       localStorage.setItem(OFFLINE_SESSION_KEY, "false");
       setAuthenticated(false);
       setUnreadMessages(0);
-      setScreen("orders");
+      setCanMonitorSales(false);
+      setScreen("home");
       setLogoutConfirmOpen(false);
-      replaceHistoryView("orders");
+      replaceHistoryView("home");
     } finally {
       setLoggingOut(false);
     }
@@ -596,6 +1291,8 @@ export function SalesApp() {
           setSellerId(loginData.sellerId);
           setSellerName(loginData.sellerName);
           setAuthenticated(true);
+          setScreen("home");
+          replaceHistoryView("home");
           localStorage.setItem(OFFLINE_SESSION_KEY, "true");
           void makeLoad();
         }}
@@ -608,7 +1305,10 @@ export function SalesApp() {
       <DesktopSidebar
         active={screen}
         user={user}
-        onOrders={() => navigateTo("orders")}
+        onHome={() => navigateTo("home")}
+        canMonitorSales={canMonitorSales}
+        onGeneralSales={() => navigateTo("general-sales")}
+        onOrders={showOrders}
         onClients={showClients}
         onCommunication={openCommunication}
         unreadMessages={unreadMessages}
@@ -616,7 +1316,13 @@ export function SalesApp() {
         onLogout={requestLogout}
       />
       <main className="main-shell">
-        {screen === "orders" ? (
+        {screen === "home" ? (
+          <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} />
+        ) : screen === "general-sales" ? (
+          canMonitorSales
+            ? <GeneralSalesScreen online={online} />
+            : <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} />
+        ) : screen === "orders" ? (
           <OrdersScreen
             orders={orders}
             loading={loadingOrders}
@@ -675,7 +1381,10 @@ export function SalesApp() {
       {screen !== "new" && (
         <MobileNav
           active={screen}
-          onOrders={() => navigateTo("orders")}
+          onHome={() => navigateTo("home")}
+          canMonitorSales={canMonitorSales}
+          onGeneralSales={() => navigateTo("general-sales")}
+          onOrders={showOrders}
           onClients={showClients}
           onCommunication={openCommunication}
           unreadMessages={unreadMessages}
@@ -827,6 +1536,9 @@ function LoginScreen({ onLogin }: { onLogin: (data: { user: string; userId: numb
 function DesktopSidebar({
   active,
   user,
+  onHome,
+  canMonitorSales,
+  onGeneralSales,
   onOrders,
   onClients,
   onCommunication,
@@ -836,6 +1548,9 @@ function DesktopSidebar({
 }: {
   active: string;
   user: string;
+  onHome: () => void;
+  canMonitorSales: boolean;
+  onGeneralSales: () => void;
   onOrders: () => void;
   onClients: () => void;
   onCommunication: () => void;
@@ -847,7 +1562,12 @@ function DesktopSidebar({
     <aside className="desktop-sidebar">
       <BrandMark />
       <nav>
-        <button><Home size={20} /> Visão geral</button>
+        <button className={active === "home" ? "active" : ""} onClick={onHome}><Home size={20} /> Visão geral</button>
+        {canMonitorSales && (
+          <button className={active === "general-sales" ? "active" : ""} onClick={onGeneralSales}>
+            <CircleDollarSign size={20} /> Vendas gerais
+          </button>
+        )}
         <button className={active === "orders" || active === "new" ? "active" : ""} onClick={onOrders}>
           <ShoppingBag size={20} /> Pedidos
         </button>
@@ -864,6 +1584,796 @@ function DesktopSidebar({
         <button onClick={onLogout} aria-label="Sair"><LogOut size={18} /></button>
       </div>
     </aside>
+  );
+}
+
+function MonthlySalesChart({ rows }: { rows: GeneralSalesData["monthly"] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !rows.length) return;
+    const draw = () => {
+      const bounds = canvas.getBoundingClientRect();
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width = Math.round(bounds.width * ratio);
+      canvas.height = Math.round(bounds.height * ratio);
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.scale(ratio, ratio);
+      const width = bounds.width;
+      const height = bounds.height;
+      const padding = { left: width < 520 ? 46 : 62, right: 18, top: 34, bottom: 42 };
+      const chartWidth = Math.max(1, width - padding.left - padding.right);
+      const chartHeight = Math.max(1, height - padding.top - padding.bottom);
+      const maximum = Math.max(...rows.map((item) => Number(item.SALES_VALUE)), 1);
+      const points = rows.map((item, index) => ({
+        x: padding.left + (rows.length === 1 ? chartWidth / 2 : (index / (rows.length - 1)) * chartWidth),
+        y: padding.top + chartHeight - (Number(item.SALES_VALUE) / maximum) * chartHeight,
+        item,
+      }));
+      context.clearRect(0, 0, width, height);
+      context.font = "10px Manrope, Arial";
+      context.textAlign = "right";
+      context.textBaseline = "middle";
+      for (let line = 0; line <= 4; line += 1) {
+        const y = padding.top + (line / 4) * chartHeight;
+        context.strokeStyle = "#e4ebe7";
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(padding.left, y);
+        context.lineTo(width - padding.right, y);
+        context.stroke();
+        context.fillStyle = "#697870";
+        context.fillText(compactMoney(maximum * (1 - line / 4)), padding.left - 8, y);
+      }
+      const gradient = context.createLinearGradient(0, padding.top, 0, padding.top + chartHeight);
+      gradient.addColorStop(0, "rgba(8, 132, 84, .27)");
+      gradient.addColorStop(1, "rgba(8, 132, 84, .03)");
+      context.beginPath();
+      context.moveTo(points[0].x, padding.top + chartHeight);
+      points.forEach((point) => context.lineTo(point.x, point.y));
+      context.lineTo(points[points.length - 1].x, padding.top + chartHeight);
+      context.closePath();
+      context.fillStyle = gradient;
+      context.fill();
+      context.beginPath();
+      points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y));
+      context.strokeStyle = "#078454";
+      context.lineWidth = 3;
+      context.lineJoin = "round";
+      context.stroke();
+      const labelInterval = width < 520 ? Math.ceil(rows.length / 5) : 1;
+      points.forEach((point, index) => {
+        context.beginPath();
+        context.arc(point.x, point.y, 4.5, 0, Math.PI * 2);
+        context.fillStyle = "white";
+        context.fill();
+        context.strokeStyle = "#078454";
+        context.lineWidth = 2.5;
+        context.stroke();
+        if (index % labelInterval === 0 || index === points.length - 1) {
+          context.fillStyle = "#26372f";
+          context.font = "700 9px Manrope, Arial";
+          context.textAlign = "center";
+          context.fillText(compactMoney(Number(point.item.SALES_VALUE)), point.x, Math.max(13, point.y - 14));
+          context.fillStyle = "#697870";
+          context.font = "9px Manrope, Arial";
+          context.fillText(point.item.SALE_MONTH, point.x, height - 17);
+        }
+      });
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [rows]);
+
+  if (!rows.length) return <div className="dashboard-empty">Sem vendas mensais no período.</div>;
+  return <canvas ref={canvasRef} className="general-line-chart" role="img" aria-label="Gráfico da evolução mensal do faturamento" />;
+}
+
+function GeneralSalesScreen({ online }: { online: boolean }) {
+  const today = new Date();
+  const yearStart = inputDate(new Date(today.getFullYear(), 0, 1));
+  const todayValue = inputDate(today);
+  const [companies, setCompanies] = useState<GeneralSalesCompany[]>([]);
+  const [company, setCompany] = useState(0);
+  const [dateFrom, setDateFrom] = useState(yearStart);
+  const [dateTo, setDateTo] = useState(todayValue);
+  const [applied, setApplied] = useState({ from: yearStart, to: todayValue, company: 0 });
+  const [data, setData] = useState<GeneralSalesData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
+  const cacheKey = `norte-sul-vendas:general-sales:v3:${applied.company}:${applied.from}:${applied.to}`;
+
+  useEffect(() => {
+    if (!online) return;
+    api<{ rows: GeneralSalesCompany[] }>("/api/sankhya/data?kind=generalSalesCompanies")
+      .then((result) => setCompanies(result.rows))
+      .catch(() => setCompanies([]));
+  }, [online]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setNotice("");
+      try {
+        if (!online) throw new Error("OFFLINE");
+        const params = new URLSearchParams({
+          kind: "generalSales",
+          dateFrom: applied.from,
+          dateTo: applied.to,
+        });
+        if (applied.company) params.set("company", String(applied.company));
+        const result = await api<GeneralSalesData>(`/api/sankhya/data?${params}`);
+        if (cancelled) return;
+        setData(result);
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+      } catch {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as GeneralSalesData | null;
+        if (cancelled) return;
+        if (cached) {
+          setData(cached);
+          setNotice("Exibindo o último monitoramento salvo neste aparelho.");
+        } else {
+          setData(null);
+          setNotice(online ? "Não foi possível carregar o monitoramento geral." : "Conecte-se para carregar este monitoramento pela primeira vez.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [applied, cacheKey, online]);
+
+  const selectPeriod = (from: string, to: string) => {
+    setDateFrom(from);
+    setDateTo(to);
+    setApplied({ from, to, company });
+  };
+  const monthStart = currentMonthStart();
+  const twelveMonthsStart = inputDate(new Date(today.getFullYear(), today.getMonth() - 11, 1));
+  const maxGroup = Math.max(...(data?.groups.map((item) => Number(item.SALES_VALUE)) ?? [0]), 1);
+  const groupTotal = data?.groups.reduce((sum, item) => sum + Number(item.SALES_VALUE), 0) ?? 0;
+  const formatPeriod = (value: string) => value.split("-").reverse().join("/");
+  const confirmedOrders = Number(data?.summary.ORDER_COUNT || 0);
+  const openOrders = Number(data?.summary.OPEN_ORDER_COUNT || 0);
+  const totalOrders = confirmedOrders + openOrders;
+
+  return (
+    <div className="page dashboard-page general-sales-page">
+      <header className="mobile-header dashboard-mobile-header">
+        <BrandMark compact />
+        <div className="page-title"><h1>Vendas gerais</h1><p>Monitoramento das empresas</p></div>
+        <span className={`connection-dot ${online ? "" : "offline"}`} />
+      </header>
+      <header className="desktop-header">
+        <div><span className="eyebrow">Gestão comercial</span><h1>Vendas gerais</h1><p>Desempenho consolidado e separado por empresa.</p></div>
+        <span className="sync-badge"><CloudCheck size={15} /> {online ? "Dados do Sankhya" : "Dados salvos"}</span>
+      </header>
+
+      <section className="general-sales-filter" aria-label="Filtros do monitoramento geral">
+        <div className="dashboard-period-title"><CalendarDays size={19} /><span><strong>Período analisado</strong><small>{formatPeriod(applied.from)} a {formatPeriod(applied.to)}</small></span></div>
+        <div className="dashboard-period-presets">
+          <button onClick={() => selectPeriod(monthStart, todayValue)}>Este mês</button>
+          <button className={applied.from === yearStart && applied.to === todayValue ? "active" : ""} onClick={() => selectPeriod(yearStart, todayValue)}>Este ano</button>
+          <button onClick={() => selectPeriod(twelveMonthsStart, todayValue)}>Últimos 12 meses</button>
+        </div>
+        <label>Empresa<select value={company} onChange={(event) => setCompany(Number(event.target.value))}><option value={0}>Todas as empresas</option>{companies.map((item) => <option key={item.CODEMP} value={item.CODEMP}>{item.CODEMP} — {item.NOMEFANTASIA}</option>)}</select></label>
+        <label>De<input type="date" value={dateFrom} max={dateTo} onChange={(event) => setDateFrom(event.target.value)} /></label>
+        <label>Até<input type="date" value={dateTo} min={dateFrom} max={todayValue} onChange={(event) => setDateTo(event.target.value)} /></label>
+        <button className="primary dashboard-period-apply" onClick={() => setApplied({ from: dateFrom, to: dateTo, company })}><Filter size={15} /> Aplicar</button>
+      </section>
+
+      {notice && <div className="dashboard-notice"><CloudOff size={16} /> {notice}</div>}
+      {loading ? (
+        <div className="dashboard-loading"><LoaderCircle className="spin" /><span>Consolidando as vendas...</span></div>
+      ) : data ? (
+        <>
+          <p className="general-updated"><span /> Dados atualizados conforme o período selecionado</p>
+          <section className="general-kpis">
+            <article className="dashboard-kpi general-kpi sales"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(data.summary.SALES_VALUE))}</strong><em>{totalOrders.toLocaleString("pt-BR")} pedidos no total</em></div></article>
+            <article className="dashboard-kpi general-kpi ticket"><span><ClipboardList /></span><div><small>Ticket médio</small><strong>{money(Number(data.summary.AVG_TICKET))}</strong><em>por pedido faturado</em></div></article>
+            <article className="dashboard-kpi general-kpi clients"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{Number(data.summary.CLIENT_COUNT).toLocaleString("pt-BR")}</strong><em>{Number(data.summary.SELLER_COUNT).toLocaleString("pt-BR")} vendedores</em></div></article>
+            <article className="dashboard-kpi general-kpi orders"><span><PackageCheck /></span><div><small>Pedidos faturados</small><strong>{confirmedOrders.toLocaleString("pt-BR")}</strong><em>{totalOrders ? ((confirmedOrders / totalOrders) * 100).toFixed(1).replace(".", ",") : "0,0"}% do total</em></div></article>
+          </section>
+
+          <section className="general-monitor-grid">
+            <article className="dashboard-card general-monthly-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Evolução</span><h2>Vendas por mês</h2></div><span className="general-legend"><i /> Valor vendido</span></div>
+              <MonthlySalesChart rows={data.monthly} />
+            </article>
+
+            <article className="dashboard-card general-pipeline-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Pipeline</span><h2>Status dos pedidos</h2></div></div>
+              <div className="general-pipeline-content">
+                <div className="general-donut" style={{ background: `conic-gradient(#078454 0 ${totalOrders ? (confirmedOrders / totalOrders) * 360 : 0}deg, #efa85d 0 360deg)` }}>
+                  <span><strong>{totalOrders.toLocaleString("pt-BR")}</strong><small>pedidos</small></span>
+                </div>
+                <div className="pipeline-legend">
+                  <div><i className="confirmed" /><span>Faturados</span><strong>{confirmedOrders.toLocaleString("pt-BR")}</strong></div>
+                  <div><i className="open" /><span>Em aberto</span><strong>{openOrders.toLocaleString("pt-BR")}</strong></div>
+                  <small>{money(Number(data.summary.OPEN_VALUE))} aguardando faturamento</small>
+                </div>
+              </div>
+            </article>
+
+            <article className="dashboard-card general-seller-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Desempenho</span><h2>Ranking de vendedores</h2></div><span className="general-card-tag">Top 10</span></div>
+              <div className="general-seller-ranking general-ranking-scroll">
+                {data.sellers.slice(0, 10).map((item, index) => <div className="general-seller-row" key={item.CODVEND}><b className={index < 3 ? `podium podium-${index + 1}` : ""}>{index + 1}</b><div><strong>{item.APELIDO}</strong><small>{Number(item.ORDER_COUNT)} pedidos · ticket {money(Number(item.AVG_TICKET))}</small></div><em>{compactMoney(Number(item.SALES_VALUE))}</em></div>)}
+                {!data.sellers.length && <div className="dashboard-empty">Nenhum vendedor com vendas.</div>}
+              </div>
+            </article>
+
+            <article className="dashboard-card general-group-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Mix de produtos</span><h2>Grupos mais vendidos</h2></div><span className="general-card-tag">Por valor</span></div>
+              <div className="general-group-ranking general-ranking-scroll">
+                {data.groups.slice(0, 10).map((item) => <div className="general-group-row" key={item.CODGRUPOPROD}><div><strong>{item.DESCRGRUPOPROD}</strong><em>{compactMoney(Number(item.SALES_VALUE))}</em></div><small>{groupTotal ? ((Number(item.SALES_VALUE) / groupTotal) * 100).toFixed(1).replace(".", ",") : "0,0"}% de participação</small><span><i style={{ width: `${(Number(item.SALES_VALUE) / maxGroup) * 100}%` }} /></span></div>)}
+                {!data.groups.length && <div className="dashboard-empty">Nenhum grupo vendido no período.</div>}
+              </div>
+            </article>
+
+            <article className="dashboard-card general-company-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Comparativo</span><h2>Desempenho por empresa</h2></div><Building2 /></div>
+              <div className="general-company-table-wrap">
+                <div className="general-company-table general-company-head"><span>Empresa</span><span>Pedidos</span><span>Clientes</span><span>Ticket médio</span><span>Vendas</span><span>Participação</span></div>
+                {data.companies.map((item) => {
+                  const participation = data.summary.SALES_VALUE ? (Number(item.SALES_VALUE) / Number(data.summary.SALES_VALUE)) * 100 : 0;
+                  return <div className="general-company-table general-company-row" key={item.CODEMP}><div className="general-company-name"><b>{String(item.NOMEFANTASIA || "E").charAt(0)}</b><strong>{item.CODEMP} - {item.NOMEFANTASIA}</strong></div><span data-label="Pedidos">{Number(item.ORDER_COUNT).toLocaleString("pt-BR")}</span><span data-label="Clientes">{Number(item.CLIENT_COUNT).toLocaleString("pt-BR")}</span><span data-label="Ticket médio">{money(Number(item.AVG_TICKET))}</span><span data-label="Vendas">{money(Number(item.SALES_VALUE))}</span><span className="company-participation" data-label="Participação"><i><b style={{ width: `${participation}%` }} /></i>{participation.toFixed(1).replace(".", ",")}%</span></div>;
+                })}
+                {!data.companies.length && <div className="dashboard-empty">Nenhuma venda no período.</div>}
+              </div>
+            </article>
+          </section>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function HomeScreen({ sellerId, sellerName, online }: { sellerId: number; sellerName: string; online: boolean }) {
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [dashboardSellers, setDashboardSellers] = useState<DashboardSeller[]>([]);
+  const [selectedSellerId, setSelectedSellerId] = useState(sellerId);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [dateFrom, setDateFrom] = useState(() => currentMonthStart());
+  const [dateTo, setDateTo] = useState(() => inputDate(new Date()));
+  const [appliedPeriod, setAppliedPeriod] = useState(() => ({ from: currentMonthStart(), to: inputDate(new Date()) }));
+  const [detail, setDetail] = useState<DashboardDetailSelection | null>(null);
+  const [detailRows, setDetailRows] = useState<ApiRow[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [generatingPanelReport, setGeneratingPanelReport] = useState<DashboardPanelReport | null>(null);
+  const [reportError, setReportError] = useState("");
+  const selectedSellerName = dashboardSellers.find((item) => Number(item.CODVEND) === selectedSellerId)?.APELIDO || sellerName;
+  const cacheKey = `norte-sul-vendas:dashboard:v2:${selectedSellerId}:${appliedPeriod.from}:${appliedPeriod.to}`;
+  const periodLabel = `${displayPeriodDate(appliedPeriod.from)} a ${displayPeriodDate(appliedPeriod.to)}`;
+
+  const selectPeriod = (from: string, to: string) => {
+    setDateFrom(from);
+    setDateTo(to);
+    setAppliedPeriod({ from, to });
+  };
+
+  useEffect(() => {
+    setSelectedSellerId(sellerId);
+  }, [sellerId]);
+
+  useEffect(() => {
+    if (!online) return;
+    let cancelled = false;
+    void api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers", { cache: "no-store" })
+      .then((result) => {
+        if (cancelled) return;
+        setDashboardSellers(result.rows.map((item) => ({ CODVEND: Number(item.CODVEND), APELIDO: String(item.APELIDO || `Vendedor ${item.CODVEND}`) })));
+      })
+      .catch(() => {
+        if (!cancelled) setDashboardSellers([]);
+      });
+    return () => { cancelled = true; };
+  }, [online]);
+
+  const selectCurrentMonth = () => {
+    const today = new Date();
+    selectPeriod(inputDate(new Date(today.getFullYear(), today.getMonth(), 1)), inputDate(today));
+  };
+
+  const selectLastThreeMonths = () => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setMonth(start.getMonth() - 3);
+    start.setDate(start.getDate() + 1);
+    selectPeriod(inputDate(start), inputDate(today));
+  };
+
+  const generateCompleteReport = async () => {
+    if (!dashboard || generatingReport) return;
+    setGeneratingReport(true);
+    setReportError("");
+    try {
+      let products: ApiRow[] = dashboard.topProducts;
+      let clients: ApiRow[] = dashboard.topClients;
+      if (online) {
+        try {
+          const reportParams = new URLSearchParams({ dateFrom: appliedPeriod.from, dateTo: appliedPeriod.to, seller: String(selectedSellerId) });
+          const [productResult, clientResult] = await Promise.all([
+            api<{ rows: ApiRow[] }>(`/api/sankhya/data?kind=dashboardProducts&${reportParams}`, { cache: "no-store" }),
+            api<{ rows: ApiRow[] }>(`/api/sankhya/data?kind=dashboardClients&${reportParams}`, { cache: "no-store" }),
+          ]);
+          products = productResult.rows;
+          clients = clientResult.rows;
+        } catch {
+          // O resumo carregado permite gerar o PDF mesmo se a consulta detalhada falhar.
+        }
+      }
+      await downloadSalesReport({
+        dashboard,
+        sellerName: selectedSellerName,
+        periodLabel,
+        dateFrom: appliedPeriod.from,
+        dateTo: appliedPeriod.to,
+        products,
+        clients,
+      });
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : "Não foi possível gerar o relatório agora.");
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const generatePanelReport = async (kind: DashboardPanelReport) => {
+    if (!dashboard || generatingPanelReport || generatingReport) return;
+    setGeneratingPanelReport(kind);
+    setReportError("");
+    const cachedRows = (type: DashboardDetailType) => {
+      try {
+        const key = `norte-sul-vendas:dashboard-detail:v2:${selectedSellerId}:${type}:${appliedPeriod.from}:${appliedPeriod.to}:all:all`;
+        return JSON.parse(localStorage.getItem(key) || "null") as ApiRow[] | null;
+      } catch {
+        return null;
+      }
+    };
+    const loadRows = async (type: DashboardDetailType, fallback: ApiRow[]) => {
+      const cached = cachedRows(type);
+      if (!online) return cached ?? fallback;
+      try {
+        const params = new URLSearchParams({
+          kind: dashboardDetailKinds[type],
+          dateFrom: appliedPeriod.from,
+          dateTo: appliedPeriod.to,
+          seller: String(selectedSellerId),
+          _: String(Date.now()),
+        });
+        const result = await api<{ rows: ApiRow[] }>(`/api/sankhya/data?${params}`, { cache: "no-store" });
+        const key = `norte-sul-vendas:dashboard-detail:v2:${selectedSellerId}:${type}:${appliedPeriod.from}:${appliedPeriod.to}:all:all`;
+        localStorage.setItem(key, JSON.stringify(result.rows));
+        return result.rows;
+      } catch {
+        return cached ?? fallback;
+      }
+    };
+    try {
+      let rows: ApiRow[] = [];
+      let portfolioRows: Array<{ segment: string; rows: ApiRow[] }> = [];
+      if (kind === "products") rows = await loadRows("products", dashboard.topProducts);
+      if (kind === "clients") rows = await loadRows("clients", dashboard.topClients);
+      if (kind === "portfolio") {
+        const [newClients, recurringClients, reactivatedClients, inactiveClients] = await Promise.all([
+          loadRows("newClients", []),
+          loadRows("recurringClients", []),
+          loadRows("reactivatedClients", []),
+          loadRows("inactiveClients", []),
+        ]);
+        portfolioRows = [
+          { segment: "Clientes novos", rows: newClients },
+          { segment: "Clientes recorrentes", rows: recurringClients },
+          { segment: "Clientes reativados", rows: reactivatedClients },
+          { segment: "Clientes que precisam de atencao", rows: inactiveClients },
+        ];
+      }
+      await downloadDashboardPanelReport({
+        kind,
+        dashboard,
+        sellerName: selectedSellerName,
+        periodLabel,
+        dateFrom: appliedPeriod.from,
+        dateTo: appliedPeriod.to,
+        rows,
+        portfolioRows,
+      });
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : "Não foi possível gerar o PDF deste painel.");
+    } finally {
+      setGeneratingPanelReport(null);
+    }
+  };
+
+  const panelPdfButton = (kind: DashboardPanelReport, label: string) => (
+    <button
+      className="panel-pdf-button"
+      onClick={() => void generatePanelReport(kind)}
+      disabled={generatingPanelReport !== null || generatingReport}
+      aria-label={`Gerar PDF de ${label}`}
+      title={`Gerar PDF de ${label}`}
+    >
+      {generatingPanelReport === kind ? <LoaderCircle className="spin" size={14} /> : <FileText size={14} />}
+      <span>PDF</span>
+    </button>
+  );
+
+  const openDashboardDetail = (selection: DashboardDetailSelection) => {
+    setDetail(selection);
+    window.history.pushState(
+      { norteSulVendas: true, view: "home", dialog: "dashboard-detail" } satisfies AppHistoryState,
+      "",
+      window.location.href,
+    );
+  };
+
+  const closeDashboardDetail = () => window.history.back();
+
+  useEffect(() => {
+    const closeOnBack = (event: PopStateEvent) => {
+      const state = event.state as AppHistoryState | null;
+      if (state?.dialog !== "dashboard-detail") setDetail(null);
+    };
+    window.addEventListener("popstate", closeOnBack);
+    return () => window.removeEventListener("popstate", closeOnBack);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDashboard = async () => {
+      setLoading(true);
+      setDashboard(null);
+      setError("");
+      try {
+        if (!online) throw new Error("OFFLINE");
+        const params = new URLSearchParams({ kind: "dashboard", dateFrom: appliedPeriod.from, dateTo: appliedPeriod.to, seller: String(selectedSellerId) });
+        const result = await api<DashboardData>(`/api/sankhya/data?${params}`);
+        if (cancelled) return;
+        setDashboard(result);
+        localStorage.setItem(cacheKey, JSON.stringify(result));
+      } catch {
+        try {
+          const cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as DashboardData | null;
+          if (!cancelled && cached) {
+            setDashboard(cached);
+            setError("Exibindo o último resumo salvo neste aparelho.");
+          } else if (!cancelled) {
+            setError(online ? "Não foi possível carregar o desempenho agora." : "Faça uma carga online para salvar o painel neste aparelho.");
+          }
+        } catch {
+          if (!cancelled) setError("Não foi possível carregar o desempenho agora.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void loadDashboard();
+    return () => { cancelled = true; };
+  }, [appliedPeriod.from, appliedPeriod.to, cacheKey, online, selectedSellerId]);
+
+  useEffect(() => {
+    if (!detail) return;
+    let cancelled = false;
+    const loadDetail = async () => {
+      setDetailLoading(true);
+      setDetailRows([]);
+      setDetailError("");
+      const detailCacheKey = `norte-sul-vendas:dashboard-detail:v2:${selectedSellerId}:${detail.type}:${appliedPeriod.from}:${appliedPeriod.to}:${detail.date || "all"}:${detail.groupId || "all"}`;
+      try {
+        if (!online) throw new Error("OFFLINE");
+        const params = new URLSearchParams({
+          kind: dashboardDetailKinds[detail.type],
+          dateFrom: appliedPeriod.from,
+          dateTo: appliedPeriod.to,
+          seller: String(selectedSellerId),
+        });
+        if (detail.date) {
+          const [day, month, year] = detail.date.split("/");
+          params.set("date", `${year}-${month}-${day}`);
+        }
+        if (detail.groupId) params.set("group", String(detail.groupId));
+        params.set("_", String(Date.now()));
+        const result = await api<{ rows: ApiRow[] }>(`/api/sankhya/data?${params}`, { cache: "no-store" });
+        if (cancelled) return;
+        const validRows = detail.type === "day"
+          ? result.rows.every((row) => row.NUNOTA != null && row.NOMEPARC != null)
+          : detail.type === "products" || detail.type === "groupProducts"
+            ? result.rows.every((row) => row.ENTITY_ID != null && row.ENTITY_NAME != null && row.QUANTITY != null)
+            : detail.type === "clients"
+              ? result.rows.every((row) => row.ENTITY_ID != null && row.ENTITY_NAME != null && row.AVG_TICKET != null)
+              : detail.type === "inactiveClients"
+                ? result.rows.every((row) => row.ENTITY_ID != null && row.ENTITY_NAME != null && row.DAYS_WITHOUT_PURCHASE != null)
+                : result.rows.every((row) => row.ENTITY_ID != null && row.ENTITY_NAME != null && row.REFERENCE_DATE != null);
+        if (!validRows) throw new Error("INVALID_DETAIL_RESPONSE");
+        setDetailRows(result.rows);
+        localStorage.setItem(detailCacheKey, JSON.stringify(result.rows));
+      } catch {
+        try {
+          const cached = JSON.parse(localStorage.getItem(detailCacheKey) || "null") as ApiRow[] | null;
+          if (!cancelled && cached) {
+            setDetailRows(cached);
+            setDetailError("Exibindo os últimos detalhes salvos neste aparelho.");
+          } else if (!cancelled) {
+            setDetailError(online ? "Não foi possível carregar os detalhes agora." : "Estes detalhes ainda não foram consultados neste aparelho.");
+          }
+        } catch {
+          if (!cancelled) setDetailError("Não foi possível carregar os detalhes agora.");
+        }
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    };
+    void loadDetail();
+    return () => { cancelled = true; };
+  }, [appliedPeriod.from, appliedPeriod.to, detail, online, selectedSellerId]);
+
+  const maxDaily = Math.max(...(dashboard?.dailySales.map((item) => Number(item.SALES_VALUE)) ?? [0]), 1);
+  const maxProduct = Math.max(...(dashboard?.topProducts.map((item) => Number(item.QUANTITY)) ?? [0]), 1);
+  const groupSalesTotal = dashboard?.salesByGroup.reduce((sum, item) => sum + Number(item.SALES_VALUE), 0) ?? 0;
+  const maxGroupSales = Math.max(...(dashboard?.salesByGroup.map((item) => Number(item.SALES_VALUE)) ?? [0]), 1);
+
+  return (
+    <div className="page dashboard-page">
+      <header className="mobile-header dashboard-mobile-header">
+        <BrandMark compact />
+        <div className="page-title"><h1>Início</h1><p>Seu desempenho em vendas</p></div>
+        <div className="dashboard-mobile-actions">
+          <button className="icon-button dashboard-report-mobile" onClick={() => void generateCompleteReport()} disabled={!dashboard || loading || generatingReport} aria-label="Gerar relatório completo em PDF" title="Gerar relatório em PDF">
+            {generatingReport ? <LoaderCircle className="spin" size={19} /> : <FileText size={19} />}
+          </button>
+          <span className={`connection-dot ${online ? "online" : "offline"}`} aria-label={online ? "Online" : "Offline"} />
+        </div>
+      </header>
+      <header className="desktop-header">
+        <div><span className="eyebrow">Desempenho comercial</span><h1>Olá, {sellerName.split(" ")[0]}</h1><p>Acompanhe seus resultados de {periodLabel}.</p></div>
+        <div className="dashboard-header-actions">
+          <button className="primary dashboard-report-button" onClick={() => void generateCompleteReport()} disabled={!dashboard || loading || generatingReport}>
+            {generatingReport ? <LoaderCircle className="spin" size={17} /> : <FileText size={17} />}
+            {generatingReport ? "Gerando relatório..." : "Gerar relatório completo"}
+          </button>
+          <span className={`connection-badge ${online ? "online" : "offline"}`}>{online ? <CloudCheck size={16} /> : <CloudOff size={16} />}{online ? "Dados do Sankhya" : "Dados salvos"}</span>
+        </div>
+      </header>
+
+      {dashboardSellers.length > 0 && (
+        <section className="dashboard-seller-switch" aria-label="Selecionar vendedor para análise">
+          <UsersRound size={19} />
+          <label>
+            <span>Analisando vendedor</span>
+            <select value={selectedSellerId} onChange={(event) => setSelectedSellerId(Number(event.target.value))}>
+              {dashboardSellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
+            </select>
+          </label>
+          <small>Os indicadores e relatórios abaixo respeitam o vendedor selecionado.</small>
+        </section>
+      )}
+
+      <section className="dashboard-period-filter" aria-label="Período do desempenho">
+        <div className="dashboard-period-title"><CalendarDays size={20} /><span><strong>Período analisado</strong><small>{periodLabel}</small></span></div>
+        <div className="dashboard-period-presets">
+          <button className={appliedPeriod.from === currentMonthStart() && appliedPeriod.to === inputDate(new Date()) ? "active" : ""} onClick={selectCurrentMonth}>Este mês</button>
+          <button onClick={() => selectPeriod(daysAgo(29), inputDate(new Date()))}>Últimos 30 dias</button>
+          <button onClick={selectLastThreeMonths}>Últimos 3 meses</button>
+        </div>
+        <label>De<input type="date" value={dateFrom} max={dateTo || inputDate(new Date())} onChange={(event) => setDateFrom(event.target.value)} /></label>
+        <label>Até<input type="date" value={dateTo} min={dateFrom} max={inputDate(new Date())} onChange={(event) => setDateTo(event.target.value)} /></label>
+        <button className="primary dashboard-period-apply" disabled={!dateFrom || !dateTo || dateFrom > dateTo || (dateFrom === appliedPeriod.from && dateTo === appliedPeriod.to)} onClick={() => setAppliedPeriod({ from: dateFrom, to: dateTo })}>
+          {loading ? <LoaderCircle className="spin" size={17} /> : <Filter size={17} />} Aplicar
+        </button>
+      </section>
+
+      {error && <div className="dashboard-notice"><CloudOff size={17} /> {error}</div>}
+      {reportError && <div className="dashboard-notice"><FileText size={17} /> {reportError}</div>}
+      {loading && !dashboard ? (
+        <div className="dashboard-loading"><LoaderCircle className="spin" /><span>Calculando seu desempenho...</span></div>
+      ) : dashboard ? (
+        <>
+          <section className="dashboard-kpis" aria-label="Resumo do período">
+            <article className="dashboard-kpi featured"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(dashboard.summary.SALES_VALUE))}</strong><em>{periodLabel}</em></div></article>
+            <article className="dashboard-kpi"><span><ShoppingBag /></span><div><small>Pedidos faturados</small><strong>{dashboard.summary.ORDER_COUNT}</strong></div></article>
+            <article className="dashboard-kpi"><span><ClipboardList /></span><div><small>Ticket médio</small><strong>{money(Number(dashboard.summary.AVG_TICKET))}</strong><em>por pedido</em></div></article>
+            <article className="dashboard-kpi"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{dashboard.summary.CLIENT_COUNT}</strong><em>clientes únicos</em></div></article>
+          </section>
+
+          <section className="dashboard-grid">
+            <article className="dashboard-card sales-chart-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Evolução</span><div className="dashboard-panel-title-row"><h2>Valor de vendas por dia</h2>{panelPdfButton("evolution", "Evolução das vendas")}</div></div><strong>{money(Number(dashboard.summary.SALES_VALUE))}</strong></div>
+              {dashboard.dailySales.length ? (
+                <div className="sales-bars" aria-label="Gráfico diário de vendas">
+                  {dashboard.dailySales.map((item) => (
+                    <button className="sales-bar-item" key={item.SALE_DATE} title={`${item.SALE_DATE}: ${money(Number(item.SALES_VALUE))}. Abrir pedidos do dia.`} onClick={() => openDashboardDetail({ type: "day", date: item.SALE_DATE })}>
+                      <span>{money(Number(item.SALES_VALUE)).replace("R$ ", "")}</span>
+                      <div><i style={{ height: `${Math.max(8, (Number(item.SALES_VALUE) / maxDaily) * 100)}%` }} /></div>
+                      <small>{item.SALE_DATE.slice(0, 5)}</small>
+                    </button>
+                  ))}
+                </div>
+              ) : <div className="dashboard-empty">Nenhuma venda faturada neste período.</div>}
+            </article>
+
+            <article className="dashboard-card product-ranking-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Mix de vendas</span><div className="dashboard-panel-title-row"><h2>Produtos mais vendidos</h2>{panelPdfButton("products", "Mix de vendas")}</div></div><span className="dashboard-card-actions"><button onClick={() => openDashboardDetail({ type: "products" })}>Saiba mais <ArrowRight size={14} /></button><PackageCheck /></span></div>
+              {dashboard.topProducts.length ? (
+                <div className="ranking-list">
+                  {dashboard.topProducts.map((item, index) => (
+                    <div className="ranking-row" key={`${item.CODPROD}-${index}`}>
+                      <b>{index + 1}</b><div><strong>{item.DESCRPROD}</strong><small>Cód. {item.CODPROD} · {Number(item.QUANTITY).toLocaleString("pt-BR")} un.</small><span><i style={{ width: `${Math.max(6, (Number(item.QUANTITY) / maxProduct) * 100)}%` }} /></span></div><em>{money(Number(item.SALES_VALUE))}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="dashboard-empty">Nenhum produto vendido neste período.</div>}
+            </article>
+
+            <article className="dashboard-card group-sales-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Composição do faturamento</span><div className="dashboard-panel-title-row"><h2>Vendas por grupo de produto</h2>{panelPdfButton("groups", "Grupos de produtos")}</div></div><Box /></div>
+              {dashboard.salesByGroup.length ? (
+                <div className="group-sales-bars">
+                  {dashboard.salesByGroup.map((item) => {
+                    const value = Number(item.SALES_VALUE);
+                    const share = groupSalesTotal ? (value / groupSalesTotal) * 100 : 0;
+                    return (
+                      <button className="group-sales-row" key={item.CODGRUPOPROD} onClick={() => openDashboardDetail({ type: "groupProducts", groupId: Number(item.CODGRUPOPROD), groupName: String(item.DESCRGRUPOPROD) })} title={`Ver produtos vendidos do grupo ${item.DESCRGRUPOPROD}`}>
+                        <div><strong>{item.DESCRGRUPOPROD}</strong><small>{share.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% de participação</small></div>
+                        <em>{money(value)}</em>
+                        <span><i style={{ width: `${Math.max(2, (value / maxGroupSales) * 100)}%` }} /></span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : <div className="dashboard-empty">Nenhuma venda por grupo neste período.</div>}
+            </article>
+
+            <article className="dashboard-card clients-ranking-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Relacionamento</span><div className="dashboard-panel-title-row"><h2>Principais clientes do período</h2>{panelPdfButton("clients", "Relacionamento com clientes")}</div></div><span className="dashboard-card-actions"><button onClick={() => openDashboardDetail({ type: "clients" })}>Saiba mais <ArrowRight size={14} /></button><Building2 /></span></div>
+              {dashboard.topClients.length ? (
+                <div className="client-ranking-list">
+                  {dashboard.topClients.map((item, index) => (
+                    <div key={item.CODPARC}><b>{index + 1}</b><span><strong>{item.NOMEPARC}</strong><small>{item.ORDER_COUNT} {Number(item.ORDER_COUNT) === 1 ? "pedido" : "pedidos"}</small></span><em>{money(Number(item.SALES_VALUE))}</em></div>
+                  ))}
+                </div>
+              ) : <div className="dashboard-empty">Nenhum cliente faturado neste período.</div>}
+            </article>
+          </section>
+
+          <section className="dashboard-secondary-grid">
+            <article className="dashboard-card client-portfolio-card">
+              <div className="dashboard-card-heading"><div><span className="eyebrow">Relacionamento comercial</span><div className="dashboard-panel-title-row"><h2>Carteira de clientes</h2>{panelPdfButton("portfolio", "Carteira de clientes")}</div></div><UsersRound /></div>
+              <div className="portfolio-indicators">
+                <button onClick={() => openDashboardDetail({ type: "newClients" })}><span><UserRound /></span><div><small>Clientes novos</small><strong>{Number(dashboard.clientPortfolio.NEW_CLIENTS)}</strong></div><ArrowRight className="portfolio-card-arrow" /></button>
+                <button onClick={() => openDashboardDetail({ type: "recurringClients" })}><span><UsersRound /></span><div><small>Clientes recorrentes</small><strong>{Number(dashboard.clientPortfolio.RECURRING_CLIENTS)}</strong></div><ArrowRight className="portfolio-card-arrow" /></button>
+                <button onClick={() => openDashboardDetail({ type: "reactivatedClients" })}><span><RefreshCw /></span><div><small>Clientes reativados</small><strong>{Number(dashboard.clientPortfolio.REACTIVATED_CLIENTS)}</strong></div><ArrowRight className="portfolio-card-arrow" /></button>
+                <button className="attention" onClick={() => openDashboardDetail({ type: "inactiveClients" })}><span><CalendarDays /></span><div><small>Precisam de atenção</small><strong>{Number(dashboard.clientPortfolio.INACTIVE_30)}</strong><em>30+ dias sem comprar</em></div><ArrowRight className="portfolio-card-arrow" /></button>
+              </div>
+              <div className="portfolio-attention-strip">
+                <div><strong>{Number(dashboard.clientPortfolio.INACTIVE_30)} clientes precisam de atenção</strong><span><small>30+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_30)}</b></small><small>60+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_60)}</b></small><small>90+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_90)}</b></small></span></div>
+                <button className="primary" onClick={() => openDashboardDetail({ type: "inactiveClients" })}>Ver clientes <ArrowRight size={16} /></button>
+              </div>
+            </article>
+          </section>
+        </>
+      ) : null}
+      {detail && (
+        <DashboardDetailPanel
+          selection={detail}
+          rows={detailRows}
+          loading={detailLoading}
+          error={detailError}
+          periodLabel={periodLabel}
+          onClose={closeDashboardDetail}
+        />
+      )}
+    </div>
+  );
+}
+
+function DashboardDetailPanel({
+  selection,
+  rows,
+  loading,
+  error,
+  periodLabel,
+  onClose,
+}: {
+  selection: DashboardDetailSelection;
+  rows: ApiRow[];
+  loading: boolean;
+  error: string;
+  periodLabel: string;
+  onClose: () => void;
+}) {
+  const title = selection.type === "day"
+    ? `Pedidos de ${selection.date}`
+    : selection.type === "products"
+      ? "Mix de vendas completo"
+      : selection.type === "groupProducts"
+        ? `Produtos vendidos — ${selection.groupName}`
+        : selection.type === "clients"
+        ? "Relacionamento completo"
+        : selection.type === "newClients"
+          ? "Clientes novos"
+          : selection.type === "recurringClients"
+            ? "Clientes recorrentes"
+            : selection.type === "reactivatedClients"
+              ? "Clientes reativados"
+              : "Clientes que precisam de atenção";
+  const productDetail = selection.type === "products" || selection.type === "groupProducts";
+  const clientSegment = selection.type === "newClients" || selection.type === "recurringClients" || selection.type === "reactivatedClients";
+  const total = rows.reduce((sum, row) => sum + Number(row.SALES_VALUE ?? row.VLRNOTA ?? 0), 0);
+  const quantity = rows.reduce((sum, row) => sum + Number(row.QUANTITY ?? 0), 0);
+
+  return (
+    <div className="dashboard-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <aside className="dashboard-detail-panel" role="dialog" aria-modal="true" aria-labelledby="dashboard-detail-title">
+        <header>
+          <div><span className="eyebrow">Detalhes do desempenho</span><h2 id="dashboard-detail-title">{title}</h2><p>{selection.type === "day" ? "Pedidos faturados no dia selecionado." : selection.type === "inactiveClients" ? "Clientes da sua carteira sem comprar há 30 dias ou mais." : clientSegment ? `Clientes classificados no período de ${periodLabel}.` : `Informações completas de ${periodLabel}.`}</p></div>
+          <button className="modal-close" onClick={onClose} aria-label="Fechar painel"><X size={20} /></button>
+        </header>
+
+        {error && <div className="dashboard-detail-notice"><CloudOff size={16} /> {error}</div>}
+        <section className="dashboard-detail-summary">
+          <article><small>{selection.type === "day" ? "Pedidos" : selection.type === "inactiveClients" ? "Clientes que precisam de atenção" : clientSegment ? "Clientes" : "Registros"}</small><strong>{rows.length}</strong></article>
+          {productDetail && <article><small>Unidades vendidas</small><strong>{quantity.toLocaleString("pt-BR")}</strong></article>}
+          {selection.type !== "inactiveClients" && <article><small>Valor total</small><strong>{money(total)}</strong></article>}
+        </section>
+
+        <div className="dashboard-detail-content">
+          {loading ? <div className="dashboard-detail-empty"><LoaderCircle className="spin" /> Carregando detalhes...</div> : selection.type === "day" ? (
+            <div className="detail-order-list">
+              {rows.map((row) => (
+                <article key={String(row.NUNOTA)}>
+                  <span className="order-icon"><ShoppingBag size={18} /></span>
+                  <div><strong>{String(row.NOMEPARC)}</strong><small>Pedido {String(row.NUNOTA)} · Cliente {String(row.CODPARC)}</small></div>
+                  <em>{money(Number(row.VLRNOTA || 0))}</em>
+                </article>
+              ))}
+            </div>
+          ) : productDetail ? (
+            <div className="detail-ranking-list">
+              {rows.map((row, index) => (
+                <article key={String(row.ENTITY_ID)}><b>{index + 1}</b><div><strong>{String(row.ENTITY_NAME)}</strong><small>Cód. {String(row.ENTITY_ID)} · {Number(row.QUANTITY).toLocaleString("pt-BR")} unidades</small></div><em>{money(Number(row.SALES_VALUE || 0))}</em></article>
+              ))}
+            </div>
+          ) : selection.type === "clients" ? (
+            <div className="detail-ranking-list">
+              {rows.map((row, index) => (
+                <article key={String(row.ENTITY_ID)}><b>{index + 1}</b><div><strong>{String(row.ENTITY_NAME)}</strong><small>Cód. {String(row.ENTITY_ID)} · {String(row.ORDER_COUNT)} {Number(row.ORDER_COUNT) === 1 ? "pedido" : "pedidos"}</small></div><em>{money(Number(row.SALES_VALUE || 0))}</em></article>
+              ))}
+            </div>
+          ) : clientSegment ? (
+            <div className="detail-client-segment-list">
+              {rows.map((row) => (
+                <article key={String(row.ENTITY_ID)}>
+                  <span className="client-avatar"><UserRound size={18} /></span>
+                  <div><strong>{String(row.ENTITY_NAME)}</strong><small>Cód. {String(row.ENTITY_ID)} · {selection.type === "newClients" ? `Primeira compra: ${String(row.REFERENCE_DATE)}` : selection.type === "recurringClients" ? `Compra no período: ${String(row.REFERENCE_DATE)} · Anterior: ${String(row.PREVIOUS_PURCHASE)}` : `Reativado em: ${String(row.REFERENCE_DATE)} · ${Number(row.DAYS_TO_RETURN)} dias de intervalo`}</small></div>
+                  <em>{money(Number(row.SALES_VALUE || 0))}</em>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="detail-inactive-list">
+              {rows.map((row) => (
+                <article key={String(row.ENTITY_ID)}>
+                  <span className="client-avatar"><Building2 size={18} /></span>
+                  <div><strong>{String(row.ENTITY_NAME)}</strong><small>Cód. {String(row.ENTITY_ID)} · Última compra: {row.LAST_PURCHASE ? String(row.LAST_PURCHASE) : "Sem histórico"}</small></div>
+                  <em>{Number(row.DAYS_WITHOUT_PURCHASE) >= 99999 ? "Sem compra" : `${Number(row.DAYS_WITHOUT_PURCHASE)} dias`}</em>
+                </article>
+              ))}
+            </div>
+          )}
+          {!loading && !rows.length && <div className="dashboard-detail-empty">Nenhuma informação encontrada para este filtro.</div>}
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -885,8 +2395,20 @@ function OrdersScreen({
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Todos");
   const [showPeriod, setShowPeriod] = useState(false);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [dateFrom, setDateFrom] = useState(() => currentMonthStart());
+  const [dateTo, setDateTo] = useState(() => inputDate(new Date()));
+  const applySuggestedPeriod = (from: string, to: string) => {
+    setDateFrom(from);
+    setDateTo(to);
+    onPeriodChange(from, to);
+    setShowPeriod(false);
+  };
+  const lastThreeMonthsStart = () => {
+    const start = new Date();
+    start.setMonth(start.getMonth() - 3);
+    start.setDate(start.getDate() + 1);
+    return inputDate(start);
+  };
   const filtered = orders.filter((order) => {
     const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
     const state = order.STATUSNOTA === "L" ? "Enviados" : "Aguardando";
@@ -920,15 +2442,20 @@ function OrdersScreen({
       {showPeriod && (
         <section className="period-filter">
           <div><CalendarDays size={20} /><span><strong>Filtrar por período</strong><small>A consulta será refeita diretamente no Sankhya.</small></span></div>
+          <div className="period-filter-presets" aria-label="Períodos sugeridos">
+            <button className={dateFrom === currentMonthStart() && dateTo === inputDate(new Date()) ? "active" : ""} onClick={() => applySuggestedPeriod(currentMonthStart(), inputDate(new Date()))}>Este mês</button>
+            <button onClick={() => applySuggestedPeriod(daysAgo(29), inputDate(new Date()))}>Últimos 30 dias</button>
+            <button onClick={() => applySuggestedPeriod(lastThreeMonthsStart(), inputDate(new Date()))}>Últimos 3 meses</button>
+          </div>
           <label>De<input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} /></label>
           <label>Até<input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
           <button className="secondary" onClick={() => {
-            setDateFrom("");
-            setDateTo("");
-            onPeriodChange("", "");
+            setDateFrom(currentMonthStart());
+            setDateTo(inputDate(new Date()));
+            onPeriodChange(currentMonthStart(), inputDate(new Date()));
             setShowPeriod(false);
-          }}>Limpar</button>
-          <button className="primary" disabled={!dateFrom && !dateTo} onClick={() => {
+          }}>Este mês</button>
+          <button className="primary" disabled={!dateFrom || !dateTo || dateFrom > dateTo} onClick={() => {
             onPeriodChange(dateFrom, dateTo);
             setShowPeriod(false);
           }}>Aplicar</button>
@@ -2386,6 +3913,9 @@ function NewOrder({ onBack, onSent }: { onBack: () => void; onSent: (id?: string
 
 function MobileNav({
   active,
+  onHome,
+  canMonitorSales,
+  onGeneralSales,
   onOrders,
   onClients,
   onCommunication,
@@ -2393,6 +3923,9 @@ function MobileNav({
   onMore,
 }: {
   active: Exclude<AppScreen, "new">;
+  onHome: () => void;
+  canMonitorSales: boolean;
+  onGeneralSales: () => void;
   onOrders: () => void;
   onClients: () => void;
   onCommunication: () => void;
@@ -2400,8 +3933,13 @@ function MobileNav({
   onMore: () => void;
 }) {
   return (
-    <nav className="mobile-nav">
-      <button><Home /><span>Início</span></button>
+    <nav className={`mobile-nav ${canMonitorSales ? "management" : ""}`}>
+      <button className={active === "home" ? "active" : ""} onClick={onHome}><Home /><span>Início</span></button>
+      {canMonitorSales && (
+        <button className={active === "general-sales" ? "active" : ""} onClick={onGeneralSales}>
+          <CircleDollarSign /><span>Vendas</span>
+        </button>
+      )}
       <button className={active === "orders" ? "active" : ""} onClick={onOrders}><ShoppingBag /><span>Pedidos</span></button>
       <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound /><span>Clientes</span></button>
       <button className={active === "communication" ? "active" : ""} onClick={onCommunication}>

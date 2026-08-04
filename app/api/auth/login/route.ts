@@ -22,6 +22,7 @@ export async function POST(request: Request) {
         userId: session.userId,
         sellerId: session.sellerId,
         sellerName: session.sellerName,
+        canAnalyzeSellers: session.canAnalyzeSellers,
       },
       { headers: { "Set-Cookie": sessionCookieHeader(encoded) } },
     );

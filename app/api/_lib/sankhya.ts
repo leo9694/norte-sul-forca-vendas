@@ -3,9 +3,12 @@ const encoder = new TextEncoder();
 const SESSION_DURATION_HOURS = 12;
 const SESSION_DURATION_SECONDS = SESSION_DURATION_HOURS * 60 * 60;
 const SESSION_DURATION_MS = SESSION_DURATION_SECONDS * 1000;
+const TECHNICAL_SESSION_REUSE_MS = 15 * 60 * 1000;
 
 export type SankhyaSession = {
   jsessionid: string;
+  login: string;
+  canAnalyzeSellers: boolean;
   user: string;
   userId: number;
   sellerId: number;
@@ -19,6 +22,10 @@ type AuthenticatedSankhyaSession = {
   userId: number;
   expiresAt: number;
 };
+
+let cachedTechnicalSession: AuthenticatedSankhyaSession | null = null;
+let cachedTechnicalSessionAt = 0;
+let technicalLoginPromise: Promise<AuthenticatedSankhyaSession> | null = null;
 
 function env(name: string) {
   const value = process.env[name];
@@ -154,17 +161,17 @@ export async function loginSankhya(username: string, password: string) {
   };
 }
 
-export async function callSankhya(
-  session: SankhyaSession,
+async function callSankhyaOnce(
+  jsessionid: string,
   module: "mge" | "mgecom",
   serviceName: string,
   requestBody: unknown,
 ) {
-  const response = await fetch(omUrl(module, serviceName, session.jsessionid), {
+  const response = await fetch(omUrl(module, serviceName, jsessionid), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Cookie: `JSESSIONID=${session.jsessionid}`,
+      Cookie: `JSESSIONID=${jsessionid}`,
     },
     body: JSON.stringify({ serviceName, requestBody }),
   });
@@ -174,9 +181,55 @@ export async function callSankhya(
     responseBody?: Record<string, unknown>;
   }>(response);
   if (!response.ok || result.status !== "1") {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`SANKHYA_AUTH_REQUIRED: ${result.statusMessage || "Não autorizado."}`);
+    }
     throw new Error(result.statusMessage || "O Sankhya não concluiu a operação.");
   }
   return result;
+}
+
+function isSankhyaAuthenticationError(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error))
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /sankhya_auth_required|nao autorizado|sessao.*(?:expir|inval|nao foi reconhecida)|session.*expired|not authorized|authentication required|efetue.*login/.test(message);
+}
+
+async function getTechnicalSession(forceRefresh = false) {
+  const reusable = cachedTechnicalSession
+    && Date.now() - cachedTechnicalSessionAt < TECHNICAL_SESSION_REUSE_MS;
+  if (!forceRefresh && reusable) return cachedTechnicalSession as AuthenticatedSankhyaSession;
+  if (technicalLoginPromise) return technicalLoginPromise;
+
+  technicalLoginPromise = loginSankhya(
+    env("SANKHYA_ACCESS_USER"),
+    env("SANKHYA_ACCESS_PASSWORD"),
+  ).then((session) => {
+    cachedTechnicalSession = session;
+    cachedTechnicalSessionAt = Date.now();
+    return session;
+  }).finally(() => {
+    technicalLoginPromise = null;
+  });
+  return technicalLoginPromise;
+}
+
+export async function callSankhya(
+  session: SankhyaSession,
+  module: "mge" | "mgecom",
+  serviceName: string,
+  requestBody: unknown,
+) {
+  try {
+    return await callSankhyaOnce(session.jsessionid, module, serviceName, requestBody);
+  } catch (error) {
+    if (!isSankhyaAuthenticationError(error)) throw error;
+    const renewedSession = await getTechnicalSession(true);
+    session.jsessionid = renewedSession.jsessionid;
+    return callSankhyaOnce(session.jsessionid, module, serviceName, requestBody);
+  }
 }
 
 export async function executeQuery(session: SankhyaSession, sql: string) {
@@ -191,18 +244,30 @@ export async function executeQuery(session: SankhyaSession, sql: string) {
   );
 }
 
+function privilegedSellerAnalysisGroup(value: unknown) {
+  const group = String(value ?? "").trim().toLocaleLowerCase("pt-BR");
+  return group === "diretoria" || group === "gerente";
+}
+
+export async function canAnalyzeOtherSellers(session: SankhyaSession) {
+  const rows = await executeQuery(session, `
+    SELECT G.NOMEGRUPO
+      FROM TSIUSU U
+      JOIN TSIGRU G ON G.CODGRUPO = U.CODGRUPO
+     WHERE U.CODUSU = ${session.userId}
+  `);
+  return rows.some((row) => privilegedSellerAnalysisGroup(row.NOMEGRUPO));
+}
+
 export async function createApplicationSession(username: string, password: string) {
   const authenticatedUser = await loginSankhya(username, password);
-  let technicalSession: AuthenticatedSankhyaSession | null = null;
   try {
-    technicalSession = await loginSankhya(
-      env("SANKHYA_ACCESS_USER"),
-      env("SANKHYA_ACCESS_PASSWORD"),
-    );
+    const technicalSession = await getTechnicalSession();
     const rows = await executeQuery(technicalSession as SankhyaSession, `
       SELECT U.CODUSU, U.NOMEUSU, U.NOMEUSUCPLT, U.CODVEND,
-             V.APELIDO, V.ATIVO
+             U.CODGRUPO, G.NOMEGRUPO, V.APELIDO, V.ATIVO
         FROM TSIUSU U
+        LEFT JOIN TSIGRU G ON G.CODGRUPO = U.CODGRUPO
         LEFT JOIN TGFVEN V ON V.CODVEND = U.CODVEND
        WHERE U.CODUSU = ${authenticatedUser.userId}
     `);
@@ -216,6 +281,8 @@ export async function createApplicationSession(username: string, password: strin
     }
     return {
       jsessionid: technicalSession.jsessionid,
+      login: username.trim(),
+      canAnalyzeSellers: privilegedSellerAnalysisGroup(userData.NOMEGRUPO),
       user: String(userData.NOMEUSUCPLT || userData.NOMEUSU || username),
       userId: authenticatedUser.userId,
       sellerId,
@@ -223,8 +290,8 @@ export async function createApplicationSession(username: string, password: strin
       expiresAt: Date.now() + SESSION_DURATION_MS,
     } satisfies SankhyaSession;
   } finally {
-    await callSankhya(
-      authenticatedUser as SankhyaSession,
+    await callSankhyaOnce(
+      authenticatedUser.jsessionid,
       "mge",
       "MobileLoginSP.logout",
       {},
@@ -242,5 +309,6 @@ export async function requireSession(request: Request) {
   ) {
     throw new Error("AUTH_REQUIRED");
   }
-  return session;
+  const technicalSession = await getTechnicalSession();
+  return { ...session, jsessionid: technicalSession.jsessionid };
 }

@@ -1,4 +1,4 @@
-import { executeQuery, requireSession } from "../../_lib/sankhya";
+import { canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 
 const numeric = (value: string | null, fallback = 0) => {
   const parsed = Number(value);
@@ -23,12 +23,194 @@ export async function GET(request: Request) {
     const kind = url.searchParams.get("kind");
     const search = safeSearch(url.searchParams.get("q"));
 
+    if (kind === "generalSalesCompanies" || kind === "generalSales") {
+      if (!(await canAnalyzeOtherSellers(session))) {
+        return Response.json({ error: "Você não possui permissão para visualizar as vendas gerais." }, { status: 403 });
+      }
+
+      if (kind === "generalSalesCompanies") {
+        const rows = await executeQuery(session, `
+          SELECT DISTINCT E.CODEMP, E.NOMEFANTASIA
+            FROM TSIEMP E
+            JOIN TGFCAB C ON C.CODEMP = E.CODEMP
+           WHERE C.CODTIPOPER = 35
+             AND C.TIPMOV = 'V'
+           ORDER BY E.CODEMP
+        `);
+        return Response.json({ rows });
+      }
+
+      const dateFrom = safeDate(url.searchParams.get("dateFrom"));
+      const dateTo = safeDate(url.searchParams.get("dateTo"));
+      const companyId = numeric(url.searchParams.get("company"));
+      const startExpression = dateFrom
+        ? `TO_DATE('${dateFrom}', 'DD/MM/YYYY')`
+        : "TRUNC(SYSDATE, 'YYYY')";
+      const endExpression = dateTo
+        ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1`
+        : "TRUNC(SYSDATE) + 1";
+      const companyFilter = companyId ? `AND C.CODEMP = ${companyId}` : "";
+      const period = `
+        C.DTNEG >= ${startExpression}
+        AND C.DTNEG < ${endExpression}
+        AND C.CODTIPOPER = 35
+        AND C.TIPMOV = 'V'
+        ${companyFilter}
+      `;
+
+      const [summaryRows, companies, sellers, groups, monthly] = await Promise.all([
+        executeQuery(session, `
+          WITH DOCUMENTOS AS (
+            SELECT C.NUNOTA, C.STATUSNOTA, C.CODPARC, C.CODVEND,
+                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+              FROM TGFCAB C
+              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+             WHERE ${period}
+             GROUP BY C.NUNOTA, C.STATUSNOTA, C.CODPARC, C.CODVEND
+          )
+          SELECT NVL(SUM(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) SALES_VALUE,
+                 COUNT(CASE WHEN D.STATUSNOTA = 'L' THEN 1 END) ORDER_COUNT,
+                 NVL(AVG(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE END), 0) AVG_TICKET,
+                 COUNT(DISTINCT CASE WHEN D.STATUSNOTA = 'L' THEN D.CODPARC END) CLIENT_COUNT,
+                 COUNT(DISTINCT CASE WHEN D.STATUSNOTA = 'L' THEN D.CODVEND END) SELLER_COUNT,
+                 COUNT(CASE WHEN D.STATUSNOTA <> 'L' THEN 1 END) OPEN_ORDER_COUNT,
+                 NVL(SUM(CASE WHEN D.STATUSNOTA <> 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) OPEN_VALUE
+            FROM DOCUMENTOS D
+        `),
+        executeQuery(session, `
+          WITH DOCUMENTOS AS (
+            SELECT C.NUNOTA, C.CODEMP, C.STATUSNOTA, C.CODPARC, C.CODVEND,
+                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+              FROM TGFCAB C
+              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+             WHERE ${period}
+             GROUP BY C.NUNOTA, C.CODEMP, C.STATUSNOTA, C.CODPARC, C.CODVEND
+          )
+          SELECT D.CODEMP, E.NOMEFANTASIA,
+                 NVL(SUM(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) SALES_VALUE,
+                 COUNT(CASE WHEN D.STATUSNOTA = 'L' THEN 1 END) ORDER_COUNT,
+                 NVL(AVG(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE END), 0) AVG_TICKET,
+                 COUNT(DISTINCT CASE WHEN D.STATUSNOTA = 'L' THEN D.CODPARC END) CLIENT_COUNT,
+                 COUNT(DISTINCT CASE WHEN D.STATUSNOTA = 'L' THEN D.CODVEND END) SELLER_COUNT,
+                 COUNT(CASE WHEN D.STATUSNOTA <> 'L' THEN 1 END) OPEN_ORDER_COUNT,
+                 NVL(SUM(CASE WHEN D.STATUSNOTA <> 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) OPEN_VALUE
+            FROM DOCUMENTOS D
+            JOIN TSIEMP E ON E.CODEMP = D.CODEMP
+           GROUP BY D.CODEMP, E.NOMEFANTASIA
+           ORDER BY SALES_VALUE DESC
+        `),
+        executeQuery(session, `
+          WITH DOCUMENTOS AS (
+            SELECT C.NUNOTA, C.CODVEND, C.CODPARC,
+                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+              FROM TGFCAB C
+              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+             WHERE ${period}
+               AND C.STATUSNOTA = 'L'
+             GROUP BY C.NUNOTA, C.CODVEND, C.CODPARC
+          )
+          SELECT D.CODVEND, V.APELIDO,
+                 NVL(SUM(D.ITEM_VALUE), 0) SALES_VALUE,
+                 COUNT(*) ORDER_COUNT,
+                 COUNT(DISTINCT D.CODPARC) CLIENT_COUNT,
+                 NVL(AVG(D.ITEM_VALUE), 0) AVG_TICKET
+            FROM DOCUMENTOS D
+            JOIN TGFVEN V ON V.CODVEND = D.CODVEND
+           GROUP BY D.CODVEND, V.APELIDO
+           ORDER BY SALES_VALUE DESC
+        `),
+        executeQuery(session, `
+          SELECT P.CODGRUPOPROD, G.DESCRGRUPOPROD,
+                 NVL(SUM(I.VLRTOT), 0) SALES_VALUE,
+                 NVL(SUM(I.QTDNEG), 0) QUANTITY
+            FROM TGFCAB C
+            JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+            JOIN TGFPRO P ON P.CODPROD = I.CODPROD
+            JOIN TGFGRU G ON G.CODGRUPOPROD = P.CODGRUPOPROD
+           WHERE ${period}
+             AND C.STATUSNOTA = 'L'
+           GROUP BY P.CODGRUPOPROD, G.DESCRGRUPOPROD
+           ORDER BY SALES_VALUE DESC
+        `),
+        executeQuery(session, `
+          WITH DOCUMENTOS AS (
+            SELECT C.NUNOTA, TRUNC(C.DTNEG, 'MM') SALE_MONTH,
+                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+              FROM TGFCAB C
+              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+             WHERE ${period}
+               AND C.STATUSNOTA = 'L'
+             GROUP BY C.NUNOTA, TRUNC(C.DTNEG, 'MM')
+          )
+          SELECT TO_CHAR(D.SALE_MONTH, 'MM/YYYY') SALE_MONTH,
+                 NVL(SUM(D.ITEM_VALUE), 0) SALES_VALUE,
+                 COUNT(*) ORDER_COUNT
+            FROM DOCUMENTOS D
+           GROUP BY D.SALE_MONTH
+           ORDER BY D.SALE_MONTH
+        `),
+      ]);
+
+      return Response.json({
+        summary: summaryRows[0] ?? {},
+        companies,
+        sellers,
+        groups,
+        monthly,
+      });
+    }
+
+    if (kind === "dashboardSellers") {
+      if (!(await canAnalyzeOtherSellers(session))) {
+        return Response.json({ error: "Você não possui permissão para analisar outros vendedores." }, { status: 403 });
+      }
+      const rows = await executeQuery(session, `
+        SELECT V.CODVEND, V.APELIDO
+          FROM TGFVEN V
+         WHERE V.ATIVO = 'S'
+           AND V.CODVEND > 0
+         ORDER BY V.APELIDO
+      `);
+      return Response.json({ rows });
+    }
+
+    const sellerScopedDashboardKinds = new Set([
+      "dashboard",
+      "dashboardDay",
+      "dashboardProducts",
+      "dashboardGroupProducts",
+      "dashboardClients",
+      "dashboardNewClients",
+      "dashboardRecurringClients",
+      "dashboardReactivatedClients",
+      "dashboardInactiveClients",
+    ]);
+    let dashboardSellerId = session.sellerId;
+    if (kind && sellerScopedDashboardKinds.has(kind)) {
+      const requestedSellerId = numeric(url.searchParams.get("seller"));
+      if (requestedSellerId && requestedSellerId !== session.sellerId) {
+        if (!(await canAnalyzeOtherSellers(session))) {
+          return Response.json({ error: "Você não possui permissão para analisar este vendedor." }, { status: 403 });
+        }
+        const sellerRows = await executeQuery(session, `
+          SELECT V.CODVEND
+            FROM TGFVEN V
+           WHERE V.CODVEND = ${requestedSellerId}
+             AND V.ATIVO = 'S'
+        `);
+        if (!sellerRows.length) {
+          return Response.json({ error: "Vendedor inválido ou inativo." }, { status: 400 });
+        }
+        dashboardSellerId = requestedSellerId;
+      }
+    }
+
     if (kind === "orders") {
       const dateFrom = safeDate(url.searchParams.get("dateFrom"));
       const dateTo = safeDate(url.searchParams.get("dateTo"));
       const periodFilter = [
-        dateFrom ? `AND C.DTNEG >= TO_DATE('${dateFrom}', 'DD/MM/YYYY')` : "",
-        dateTo ? `AND C.DTNEG < TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1` : "",
+        dateFrom ? `AND C.DTNEG >= TO_DATE('${dateFrom}', 'DD/MM/YYYY')` : "AND C.DTNEG >= TRUNC(SYSDATE, 'MM')",
+        dateTo ? `AND C.DTNEG < TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1` : "AND C.DTNEG < TRUNC(SYSDATE) + 1",
       ].join("\n");
       const rows = await executeQuery(session, `
         SELECT * FROM (
@@ -49,6 +231,271 @@ export async function GET(request: Request) {
         sellerId: session.sellerId,
         sellerName: session.sellerName,
       });
+    }
+
+    if (kind === "dashboard") {
+      const dateFrom = safeDate(url.searchParams.get("dateFrom"));
+      const dateTo = safeDate(url.searchParams.get("dateTo"));
+      const startExpression = dateFrom
+        ? `TO_DATE('${dateFrom}', 'DD/MM/YYYY')`
+        : "TRUNC(SYSDATE, 'MM')";
+      const endExpression = dateTo
+        ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1`
+        : "TRUNC(SYSDATE) + 1";
+      const period = `
+        C.DTNEG >= ${startExpression}
+        AND C.DTNEG < ${endExpression}
+        AND C.CODTIPOPER = 5
+        AND C.TIPMOV = 'P'
+        AND C.CODVEND = ${dashboardSellerId}
+      `;
+      const [summaryRows, dailySales, topProducts, topClients, clientPortfolioRows, salesByGroup] = await Promise.all([
+        executeQuery(session, `
+          SELECT NVL(SUM(CASE WHEN C.STATUSNOTA = 'L' THEN C.VLRNOTA ELSE 0 END), 0) SALES_VALUE,
+                 COUNT(CASE WHEN C.STATUSNOTA = 'L' THEN 1 END) ORDER_COUNT,
+                 NVL(AVG(CASE WHEN C.STATUSNOTA = 'L' THEN C.VLRNOTA END), 0) AVG_TICKET,
+                 COUNT(DISTINCT CASE WHEN C.STATUSNOTA = 'L' THEN C.CODPARC END) CLIENT_COUNT,
+                 NVL(SUM(CASE WHEN C.STATUSNOTA <> 'L' THEN C.VLRNOTA ELSE 0 END), 0) PENDING_VALUE
+            FROM TGFCAB C
+           WHERE ${period}
+        `),
+        executeQuery(session, `
+          SELECT TO_CHAR(TRUNC(C.DTNEG), 'DD/MM/YYYY') SALE_DATE,
+                 NVL(SUM(C.VLRNOTA), 0) SALES_VALUE,
+                 COUNT(*) ORDER_COUNT
+            FROM TGFCAB C
+           WHERE ${period}
+             AND C.STATUSNOTA = 'L'
+           GROUP BY TRUNC(C.DTNEG)
+           ORDER BY TRUNC(C.DTNEG)
+        `),
+        executeQuery(session, `
+          SELECT * FROM (
+            SELECT I.CODPROD, P.DESCRPROD,
+                   NVL(SUM(I.QTDNEG), 0) QUANTITY,
+                   NVL(SUM(I.VLRTOT), 0) SALES_VALUE
+              FROM TGFCAB C
+              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+              JOIN TGFPRO P ON P.CODPROD = I.CODPROD
+             WHERE ${period}
+               AND C.STATUSNOTA = 'L'
+             GROUP BY I.CODPROD, P.DESCRPROD
+             ORDER BY SUM(I.QTDNEG) DESC, SUM(I.VLRTOT) DESC
+          ) WHERE ROWNUM <= 5
+        `),
+        executeQuery(session, `
+          SELECT * FROM (
+            SELECT C.CODPARC, P.NOMEPARC,
+                   NVL(SUM(C.VLRNOTA), 0) SALES_VALUE,
+                   COUNT(*) ORDER_COUNT
+              FROM TGFCAB C
+              JOIN TGFPAR P ON P.CODPARC = C.CODPARC
+             WHERE ${period}
+               AND C.STATUSNOTA = 'L'
+             GROUP BY C.CODPARC, P.NOMEPARC
+             ORDER BY SUM(C.VLRNOTA) DESC
+          ) WHERE ROWNUM <= 5
+        `),
+        executeQuery(session, `
+          WITH CLIENTES AS (
+            SELECT P.CODPARC
+              FROM TGFPAR P
+             WHERE P.CLIENTE = 'S'
+               AND P.ATIVO = 'S'
+               AND P.CODVEND = ${dashboardSellerId}
+          ),
+          VENDAS AS (
+            SELECT C.CODPARC, C.DTNEG
+              FROM TGFCAB C
+             WHERE C.CODTIPOPER = 5
+               AND C.TIPMOV = 'P'
+               AND C.STATUSNOTA = 'L'
+               AND C.CODVEND = ${dashboardSellerId}
+          ),
+          BASE AS (
+            SELECT CL.CODPARC,
+                   MIN(V.DTNEG) FIRST_PURCHASE,
+                   MAX(V.DTNEG) LAST_PURCHASE,
+                   MIN(CASE WHEN V.DTNEG >= ${startExpression} AND V.DTNEG < ${endExpression} THEN V.DTNEG END) PERIOD_PURCHASE,
+                   MAX(CASE WHEN V.DTNEG < ${startExpression} THEN V.DTNEG END) PREVIOUS_PURCHASE
+              FROM CLIENTES CL
+              LEFT JOIN VENDAS V ON V.CODPARC = CL.CODPARC
+             GROUP BY CL.CODPARC
+          )
+          SELECT NVL(SUM(CASE WHEN PERIOD_PURCHASE IS NOT NULL AND FIRST_PURCHASE >= ${startExpression} THEN 1 ELSE 0 END), 0) NEW_CLIENTS,
+                 NVL(SUM(CASE WHEN PERIOD_PURCHASE IS NOT NULL AND FIRST_PURCHASE < ${startExpression} AND PREVIOUS_PURCHASE >= ${startExpression} - 90 THEN 1 ELSE 0 END), 0) RECURRING_CLIENTS,
+                 NVL(SUM(CASE WHEN PERIOD_PURCHASE IS NOT NULL AND PREVIOUS_PURCHASE < ${startExpression} - 90 THEN 1 ELSE 0 END), 0) REACTIVATED_CLIENTS,
+                 NVL(SUM(CASE WHEN LAST_PURCHASE IS NULL OR LAST_PURCHASE < TRUNC(SYSDATE) - 30 THEN 1 ELSE 0 END), 0) INACTIVE_30,
+                 NVL(SUM(CASE WHEN LAST_PURCHASE IS NULL OR LAST_PURCHASE < TRUNC(SYSDATE) - 60 THEN 1 ELSE 0 END), 0) INACTIVE_60,
+                 NVL(SUM(CASE WHEN LAST_PURCHASE IS NULL OR LAST_PURCHASE < TRUNC(SYSDATE) - 90 THEN 1 ELSE 0 END), 0) INACTIVE_90
+            FROM BASE
+        `),
+        executeQuery(session, `
+          SELECT P.CODGRUPOPROD, G.DESCRGRUPOPROD,
+                 NVL(SUM(I.VLRTOT), 0) SALES_VALUE
+            FROM TGFCAB C
+            JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+            JOIN TGFPRO P ON P.CODPROD = I.CODPROD
+            JOIN TGFGRU G ON G.CODGRUPOPROD = P.CODGRUPOPROD
+           WHERE ${period}
+             AND C.STATUSNOTA = 'L'
+           GROUP BY P.CODGRUPOPROD, G.DESCRGRUPOPROD
+           ORDER BY SUM(I.VLRTOT) DESC
+        `),
+      ]);
+      return Response.json({
+        summary: summaryRows[0] ?? { SALES_VALUE: 0, ORDER_COUNT: 0, AVG_TICKET: 0, CLIENT_COUNT: 0, PENDING_VALUE: 0 },
+        dailySales,
+        topProducts,
+        topClients,
+        clientPortfolio: clientPortfolioRows[0] ?? { NEW_CLIENTS: 0, RECURRING_CLIENTS: 0, REACTIVATED_CLIENTS: 0, INACTIVE_30: 0, INACTIVE_60: 0, INACTIVE_90: 0 },
+        salesByGroup,
+      });
+    }
+
+    if (kind === "dashboardDay" || kind === "dashboardProducts" || kind === "dashboardGroupProducts" || kind === "dashboardClients" || kind === "dashboardNewClients" || kind === "dashboardRecurringClients" || kind === "dashboardReactivatedClients" || kind === "dashboardInactiveClients") {
+      const dateFrom = safeDate(url.searchParams.get("dateFrom"));
+      const dateTo = safeDate(url.searchParams.get("dateTo"));
+      const startExpression = dateFrom
+        ? `TO_DATE('${dateFrom}', 'DD/MM/YYYY')`
+        : "TRUNC(SYSDATE, 'MM')";
+      const endExpression = dateTo
+        ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1`
+        : "TRUNC(SYSDATE) + 1";
+      const period = `
+        C.DTNEG >= ${startExpression}
+        AND C.DTNEG < ${endExpression}
+        AND C.CODTIPOPER = 5
+        AND C.TIPMOV = 'P'
+        AND C.CODVEND = ${dashboardSellerId}
+        AND C.STATUSNOTA = 'L'
+      `;
+
+      if (kind === "dashboardDay") {
+        const selectedDate = safeDate(url.searchParams.get("date"));
+        if (!selectedDate) return Response.json({ error: "Selecione um dia válido." }, { status: 400 });
+        const rows = await executeQuery(session, `
+          SELECT C.NUNOTA, C.NUMNOTA, TO_CHAR(C.DTNEG, 'DD/MM/YYYY') DTNEG,
+                 C.VLRNOTA, C.CODPARC, P.NOMEPARC
+            FROM TGFCAB C
+            JOIN TGFPAR P ON P.CODPARC = C.CODPARC
+           WHERE ${period}
+             AND C.DTNEG >= TO_DATE('${selectedDate}', 'DD/MM/YYYY')
+             AND C.DTNEG < TO_DATE('${selectedDate}', 'DD/MM/YYYY') + 1
+           ORDER BY C.VLRNOTA DESC, C.NUNOTA DESC
+        `);
+        return Response.json({ rows });
+      }
+
+      if (kind === "dashboardProducts" || kind === "dashboardGroupProducts") {
+        const group = kind === "dashboardGroupProducts" ? numeric(url.searchParams.get("group")) : 0;
+        if (kind === "dashboardGroupProducts" && !group) {
+          return Response.json({ error: "Selecione um grupo de produto válido." }, { status: 400 });
+        }
+        const groupFilter = group ? `AND P.CODGRUPOPROD = ${group}` : "";
+        const productOrder = group
+          ? "SUM(I.VLRTOT) DESC, SUM(I.QTDNEG) DESC"
+          : "SUM(I.QTDNEG) DESC, SUM(I.VLRTOT) DESC";
+        const rows = await executeQuery(session, `
+          SELECT I.CODPROD ENTITY_ID, P.DESCRPROD ENTITY_NAME,
+                 NVL(SUM(I.QTDNEG), 0) QUANTITY,
+                 NVL(SUM(I.VLRTOT), 0) SALES_VALUE,
+                 COUNT(DISTINCT C.NUNOTA) ORDER_COUNT
+            FROM TGFCAB C
+            JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+            JOIN TGFPRO P ON P.CODPROD = I.CODPROD
+           WHERE ${period}
+             ${groupFilter}
+           GROUP BY I.CODPROD, P.DESCRPROD
+           ORDER BY ${productOrder}
+        `);
+        return Response.json({ rows });
+      }
+
+      if (kind === "dashboardNewClients" || kind === "dashboardRecurringClients" || kind === "dashboardReactivatedClients") {
+        const segmentCondition = kind === "dashboardNewClients"
+          ? `FIRST_PURCHASE >= ${startExpression}`
+          : kind === "dashboardRecurringClients"
+            ? `FIRST_PURCHASE < ${startExpression} AND PREVIOUS_PURCHASE >= ${startExpression} - 90`
+            : `PREVIOUS_PURCHASE < ${startExpression} - 90`;
+        const rows = await executeQuery(session, `
+          WITH CLIENTES AS (
+            SELECT P.CODPARC, P.NOMEPARC
+              FROM TGFPAR P
+             WHERE P.CLIENTE = 'S'
+               AND P.ATIVO = 'S'
+               AND P.CODVEND = ${dashboardSellerId}
+          ),
+          VENDAS AS (
+            SELECT C.CODPARC, C.NUNOTA, C.DTNEG, C.VLRNOTA
+              FROM TGFCAB C
+             WHERE C.CODTIPOPER = 5
+               AND C.TIPMOV = 'P'
+               AND C.STATUSNOTA = 'L'
+               AND C.CODVEND = ${dashboardSellerId}
+          ),
+          BASE AS (
+            SELECT CL.CODPARC, CL.NOMEPARC,
+                   MIN(V.DTNEG) FIRST_PURCHASE,
+                   MIN(CASE WHEN V.DTNEG >= ${startExpression} AND V.DTNEG < ${endExpression} THEN V.DTNEG END) REFERENCE_DATE,
+                   MAX(CASE WHEN V.DTNEG < ${startExpression} THEN V.DTNEG END) PREVIOUS_PURCHASE,
+                   COUNT(DISTINCT CASE WHEN V.DTNEG >= ${startExpression} AND V.DTNEG < ${endExpression} THEN V.NUNOTA END) ORDER_COUNT,
+                   NVL(SUM(CASE WHEN V.DTNEG >= ${startExpression} AND V.DTNEG < ${endExpression} THEN V.VLRNOTA ELSE 0 END), 0) SALES_VALUE
+              FROM CLIENTES CL
+              LEFT JOIN VENDAS V ON V.CODPARC = CL.CODPARC
+             GROUP BY CL.CODPARC, CL.NOMEPARC
+          )
+          SELECT CODPARC ENTITY_ID, NOMEPARC ENTITY_NAME,
+                 TO_CHAR(REFERENCE_DATE, 'DD/MM/YYYY') REFERENCE_DATE,
+                 TO_CHAR(PREVIOUS_PURCHASE, 'DD/MM/YYYY') PREVIOUS_PURCHASE,
+                 NVL(TRUNC(REFERENCE_DATE) - TRUNC(PREVIOUS_PURCHASE), 0) DAYS_TO_RETURN,
+                 ORDER_COUNT, SALES_VALUE
+            FROM BASE
+           WHERE REFERENCE_DATE IS NOT NULL
+             AND ${segmentCondition}
+           ORDER BY REFERENCE_DATE DESC, NOMEPARC
+        `);
+        return Response.json({ rows });
+      }
+
+      if (kind === "dashboardInactiveClients") {
+        const rows = await executeQuery(session, `
+          WITH ULTIMA_COMPRA AS (
+            SELECT C.CODPARC, MAX(C.DTNEG) LAST_PURCHASE
+              FROM TGFCAB C
+             WHERE C.CODTIPOPER = 5
+               AND C.TIPMOV = 'P'
+               AND C.STATUSNOTA = 'L'
+               AND C.CODVEND = ${dashboardSellerId}
+             GROUP BY C.CODPARC
+          )
+          SELECT P.CODPARC ENTITY_ID, P.NOMEPARC ENTITY_NAME,
+                 TO_CHAR(U.LAST_PURCHASE, 'DD/MM/YYYY') LAST_PURCHASE,
+                 NVL(TRUNC(SYSDATE) - TRUNC(U.LAST_PURCHASE), 99999) DAYS_WITHOUT_PURCHASE
+            FROM TGFPAR P
+            LEFT JOIN ULTIMA_COMPRA U ON U.CODPARC = P.CODPARC
+           WHERE P.CLIENTE = 'S'
+             AND P.ATIVO = 'S'
+             AND P.CODVEND = ${dashboardSellerId}
+             AND (U.LAST_PURCHASE IS NULL OR U.LAST_PURCHASE < TRUNC(SYSDATE) - 30)
+           ORDER BY U.LAST_PURCHASE NULLS FIRST, P.NOMEPARC
+        `);
+        return Response.json({ rows });
+      }
+
+      const rows = await executeQuery(session, `
+        SELECT C.CODPARC ENTITY_ID, P.NOMEPARC ENTITY_NAME,
+               NVL(SUM(C.VLRNOTA), 0) SALES_VALUE,
+               COUNT(*) ORDER_COUNT,
+               NVL(AVG(C.VLRNOTA), 0) AVG_TICKET,
+               MAX(C.DTNEG) LAST_ORDER_DATE
+          FROM TGFCAB C
+          JOIN TGFPAR P ON P.CODPARC = C.CODPARC
+         WHERE ${period}
+         GROUP BY C.CODPARC, P.NOMEPARC
+         ORDER BY SUM(C.VLRNOTA) DESC
+      `);
+      return Response.json({ rows });
     }
 
     if (kind === "portfolio") {
