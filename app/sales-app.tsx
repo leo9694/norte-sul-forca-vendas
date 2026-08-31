@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDollarSign,
-  Clock3,
   ClipboardList,
   CloudCheck,
   CloudOff,
@@ -1012,20 +1011,6 @@ const sankhyaDate = (value: unknown) => {
   const raw = String(value ?? "");
   if (/^\d{8}/.test(raw)) return `${raw.slice(0, 2)}/${raw.slice(2, 4)}/${raw.slice(4, 8)}`;
   return raw || "Hoje";
-};
-
-const orderDeadlineDays = (from: unknown, to: unknown) => {
-  const parse = (value: unknown) => {
-    const raw = String(value ?? "");
-    const compact = raw.match(/^(\d{2})(\d{2})(\d{4})/);
-    if (compact) return Date.UTC(Number(compact[3]), Number(compact[2]) - 1, Number(compact[1]));
-    const brazilian = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-    if (brazilian) return Date.UTC(Number(brazilian[3]), Number(brazilian[2]) - 1, Number(brazilian[1]));
-    return null;
-  };
-  const start = parse(from);
-  const end = parse(to);
-  return start == null || end == null ? null : Math.max(0, Math.round((end - start) / 86400000));
 };
 
 const orderBillingStatus = (value: unknown) => String(value ?? "").trim().toUpperCase() === "S" ? "Pendente" : "Faturado";
@@ -2863,7 +2848,7 @@ function OrdersScreen({
                 <div className="order-rich-meta">
                   <span><CalendarDays size={22} /><span><small>Emissão</small>{sankhyaDate(order.DTNEG)}</span></span>
                   <i />
-                  <span><Clock3 size={22} /><span><small>Prazo</small>{order.DTENTSAI ? `${orderDeadlineDays(order.DTNEG, order.DTENTSAI) ?? "—"} dias` : "Não informado"}</span></span>
+                  <span><CalendarDays size={22} /><span><small>Data da negociação</small>{sankhyaDate(order.DTNEG)}</span></span>
                   <i />
                   <span><FileText size={22} /><span><small>Faturamento</small>{orderBillingStatus(order.PENDENTE)}</span></span>
                 </div>

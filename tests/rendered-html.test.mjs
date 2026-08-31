@@ -223,6 +223,8 @@ assert.match(ordersScreen, /order-rich-meta/);
   assert.match(ordersScreen, /className="confirm-modal draft-delete-modal"/);
   assert.match(ordersScreen, /order-rich-meta/);
   assert.match(ordersScreen, /orderBillingStatus/);
+  assert.match(ordersScreen, /Data da negociação/);
+  assert.doesNotMatch(ordersScreen, /<small>Prazo<\/small>/);
   assert.match(dataSource, /kind === "orders"[\s\S]*?AND C\.DTNEG >= TRUNC\(SYSDATE, 'MM'\)/);
   assert.match(dataSource, /C\.DTENTSAI[\s\S]*C\.CODTIPOPER/);
   assert.match(styleSource, /@media \(max-width: 360px\)[\s\S]*\.order-card-rich/);
