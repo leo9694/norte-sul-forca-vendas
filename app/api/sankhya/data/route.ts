@@ -16,6 +16,9 @@ const safeDate = (value: string | null) => {
   return `${day}/${month}/${year}`;
 };
 
+const DASHBOARD_CACHE_TTL_MS = 90 * 1000;
+const dashboardResponseCache = new Map<string, { expiresAt: number; payload: Record<string, unknown> }>();
+
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
@@ -175,6 +178,13 @@ export async function GET(request: Request) {
     }
 
     const sellerScopedDashboardKinds = new Set([
+      "orders",
+      "portfolio",
+      "partners",
+      "orderOptions",
+      "productGroups",
+      "products",
+      "productLots",
       "dashboard",
       "dashboardDay",
       "dashboardProducts",
@@ -214,12 +224,12 @@ export async function GET(request: Request) {
       ].join("\n");
       const rows = await executeQuery(session, `
         SELECT * FROM (
-          SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.VLRNOTA, C.STATUSNOTA,
-                 C.PENDENTE, C.CODPARC, P.NOMEPARC
+          SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI, C.VLRNOTA,
+                 C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC
            FROM TGFCAB C
             JOIN TGFPAR P ON P.CODPARC = C.CODPARC
            WHERE C.CODTIPOPER = 5 AND C.TIPMOV = 'P'
-             AND C.CODVEND = ${session.sellerId}
+             AND C.CODVEND = ${dashboardSellerId}
              ${periodFilter}
            ORDER BY C.NUNOTA DESC
         ) WHERE ROWNUM <= 500
@@ -236,6 +246,11 @@ export async function GET(request: Request) {
     if (kind === "dashboard") {
       const dateFrom = safeDate(url.searchParams.get("dateFrom"));
       const dateTo = safeDate(url.searchParams.get("dateTo"));
+      const dashboardCacheKey = `${dashboardSellerId}:${dateFrom || "month"}:${dateTo || "today"}`;
+      const cachedDashboard = dashboardResponseCache.get(dashboardCacheKey);
+      if (cachedDashboard && cachedDashboard.expiresAt > Date.now()) {
+        return Response.json(cachedDashboard.payload, { headers: { "Cache-Control": "private, max-age=90" } });
+      }
       const startExpression = dateFrom
         ? `TO_DATE('${dateFrom}', 'DD/MM/YYYY')`
         : "TRUNC(SYSDATE, 'MM')";
@@ -343,14 +358,17 @@ export async function GET(request: Request) {
            ORDER BY SUM(I.VLRTOT) DESC
         `),
       ]);
-      return Response.json({
+      const payload = {
         summary: summaryRows[0] ?? { SALES_VALUE: 0, ORDER_COUNT: 0, AVG_TICKET: 0, CLIENT_COUNT: 0, PENDING_VALUE: 0 },
         dailySales,
         topProducts,
         topClients,
         clientPortfolio: clientPortfolioRows[0] ?? { NEW_CLIENTS: 0, RECURRING_CLIENTS: 0, REACTIVATED_CLIENTS: 0, INACTIVE_30: 0, INACTIVE_60: 0, INACTIVE_90: 0 },
         salesByGroup,
-      });
+      };
+      if (dashboardResponseCache.size >= 80) dashboardResponseCache.clear();
+      dashboardResponseCache.set(dashboardCacheKey, { payload, expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS });
+      return Response.json(payload, { headers: { "Cache-Control": "private, max-age=90" } });
     }
 
     if (kind === "dashboardDay" || kind === "dashboardProducts" || kind === "dashboardGroupProducts" || kind === "dashboardClients" || kind === "dashboardNewClients" || kind === "dashboardRecurringClients" || kind === "dashboardReactivatedClients" || kind === "dashboardInactiveClients") {
@@ -504,10 +522,14 @@ export async function GET(request: Request) {
                P.TELEFONE, P.EMAIL, P.CODVEND,
                E.CODEMP, E.GRUPOICMS, E.CODTAB
           FROM TGFPAR P
-          LEFT JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+          LEFT JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
+            AND E.CODEMP = (
+              SELECT MIN(E2.CODEMP) FROM TGFPAEM E2
+               WHERE E2.CODPARC = P.CODPARC AND E2.CODTAB IS NOT NULL
+            )
          WHERE P.CLIENTE = 'S'
            AND P.ATIVO = 'S'
-           AND P.CODVEND = ${session.sellerId}
+           AND P.CODVEND = ${dashboardSellerId}
          ORDER BY P.NOMEPARC
       `);
       return Response.json({ rows });
@@ -522,9 +544,13 @@ export async function GET(request: Request) {
           SELECT P.CODPARC, P.NOMEPARC, P.CODVEND,
                  E.CODEMP, E.GRUPOICMS, E.CODTAB
             FROM TGFPAR P
-            JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+            JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
+              AND E.CODEMP = (
+                SELECT MIN(E2.CODEMP) FROM TGFPAEM E2
+                 WHERE E2.CODPARC = P.CODPARC AND E2.CODTAB IS NOT NULL
+              )
            WHERE P.CLIENTE = 'S' AND P.ATIVO = 'S' AND E.CODTAB IS NOT NULL
-             AND P.CODVEND = ${session.sellerId}
+             AND P.CODVEND = ${dashboardSellerId}
                  ${filter}
            ORDER BY P.NOMEPARC
         ) WHERE ROWNUM <= 50
@@ -544,57 +570,82 @@ export async function GET(request: Request) {
 
     if (kind === "orderOptions") {
       const partner = numeric(url.searchParams.get("partner"));
+      const requestedCompany = numeric(url.searchParams.get("company"));
       if (!partner) return Response.json({ error: "Selecione um cliente." }, { status: 400 });
 
       const partnerRows = await executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, E.CODEMP, E.GRUPOICMS, E.CODTAB,
+               NVL(EM.NOMEFANTASIA, TO_CHAR(E.CODEMP)) NOMEFANTASIA,
                NVL((SELECT MAX(C.CODTIPVENDA) KEEP (DENSE_RANK LAST ORDER BY C.NUNOTA)
                       FROM TGFCAB C
                      WHERE C.CODPARC = P.CODPARC
                        AND C.CODTIPOPER = 5
-                       AND C.CODVEND = ${session.sellerId}), 53) CODTIPVENDA
+                       AND C.CODVEND = ${dashboardSellerId}), 53) CODTIPVENDA
           FROM TGFPAR P
-          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
+          LEFT JOIN TSIEMP EM ON EM.CODEMP = E.CODEMP
          WHERE P.CODPARC = ${partner}
-           AND P.CODVEND = ${session.sellerId}
+           AND P.CODVEND = ${dashboardSellerId}
            AND P.CLIENTE = 'S'
            AND P.ATIVO = 'S'
+         ORDER BY E.CODEMP
       `);
-      const partnerData = partnerRows[0];
-      if (!partnerData) return Response.json({ error: "Cliente fora da carteira ou sem cadastro na empresa 1." }, { status: 400 });
+      const companies = partnerRows.map((row) => ({
+        CODEMP: Number(row.CODEMP),
+        NOMEFANTASIA: String(row.NOMEFANTASIA),
+        GRUPOICMS: row.GRUPOICMS,
+        CODTAB: row.CODTAB,
+      })).filter((row) => row.CODEMP > 0);
+      const company = companies.some((row) => row.CODEMP === requestedCompany)
+        ? requestedCompany
+        : companies[0]?.CODEMP;
+      const partnerData = partnerRows.find((row) => Number(row.CODEMP) === company);
+      if (!partnerData || !company) return Response.json({ error: "Cliente fora da carteira ou sem Grupo ICMS/ISS cadastrado." }, { status: 400 });
 
       const tables = await executeQuery(session, `
         SELECT DISTINCT N.CODTAB, N.NOMETAB
           FROM TGFPAEM E
           JOIN TGFNTA N ON N.CODTAB = E.CODTAB
-         WHERE E.CODEMP = 1
+         WHERE E.CODEMP = ${company}
            AND E.CODPARC = ${partner}
            AND E.CODTAB IS NOT NULL
            AND N.ATIVO = 'S'
            AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
          ORDER BY N.NOMETAB
       `);
-      const negotiations = await executeQuery(session, `
+      const [negotiations, operations] = await Promise.all([executeQuery(session, `
         SELECT V.CODTIPVENDA, V.DESCRTIPVENDA
           FROM TGFTPV V
          WHERE V.ATIVO = 'S'
            AND V.CODTIPVENDA > 0
+           AND NVL(V.AD_MOBILIDADE, 'N') = 'S'
            AND V.DHALTER = (
              SELECT MAX(V2.DHALTER)
                FROM TGFTPV V2
               WHERE V2.CODTIPVENDA = V.CODTIPVENDA
            )
          ORDER BY V.DESCRTIPVENDA
-      `);
-      return Response.json({ partner: partnerData, tables, negotiations });
+      `), executeQuery(session, `
+        SELECT O.CODTIPOPER, O.DESCROPER
+          FROM TGFTOP O
+         WHERE O.CODTIPOPER IN (5, 6)
+           AND O.TIPMOV = 'P'
+           AND O.DHALTER = (
+             SELECT MAX(O2.DHALTER) FROM TGFTOP O2
+              WHERE O2.CODTIPOPER = O.CODTIPOPER
+           )
+         ORDER BY O.CODTIPOPER
+      `)]);
+      return Response.json({ partner: partnerData, companies, company, tables, negotiations, operations });
     }
 
     if (kind === "productGroups") {
       const partner = numeric(url.searchParams.get("partner"));
       const priceCode = numeric(url.searchParams.get("priceCode"));
+      const company = numeric(url.searchParams.get("company"));
       const brand = safeSearch(url.searchParams.get("brand"));
-      if (!partner || !priceCode) {
-        return Response.json({ error: "Selecione o cliente e a tabela de preço." }, { status: 400 });
+      if (!partner || !priceCode || !company) {
+        return Response.json({ error: "Selecione o cliente, a empresa e a tabela de preço." }, { status: 400 });
       }
       const brandFilter = brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
       const eligibleItems = `
@@ -602,7 +653,7 @@ export async function GET(request: Request) {
           SELECT CODPROD, CODLOCAL, CONTROLE,
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
-           WHERE CODEMP = 1 AND ATIVO = 'S'
+           WHERE CODEMP = ${company} AND ATIVO = 'S'
            GROUP BY CODPROD, CODLOCAL, CONTROLE
           HAVING SUM(ESTOQUE - RESERVADO) > 0
         ),
@@ -635,9 +686,9 @@ export async function GET(request: Request) {
              AND EXISTS (
                SELECT 1
                  FROM TGFPAR CL
-                 JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
+                JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = ${company}
                 WHERE CL.CODPARC = ${partner}
-                  AND CL.CODVEND = ${session.sellerId}
+                  AND CL.CODVEND = ${dashboardSellerId}
                   AND CL.CLIENTE = 'S'
                   AND CL.ATIVO = 'S'
                   AND PE.CODTAB = ${priceCode}
@@ -678,17 +729,59 @@ export async function GET(request: Request) {
       return Response.json({ rows, brands });
     }
 
+    if (kind === "productLots") {
+      const partner = numeric(url.searchParams.get("partner"));
+      const priceCode = numeric(url.searchParams.get("priceCode"));
+      const company = numeric(url.searchParams.get("company"));
+      const product = numeric(url.searchParams.get("product"));
+      if (!partner || !priceCode || !company || !product) {
+        return Response.json({ error: "Produto, cliente, empresa e tabela são obrigatórios." }, { status: 400 });
+      }
+      const rows = await executeQuery(session, `
+        SELECT P.REFERENCIA, E.CODLOCAL, NVL(TRIM(E.CONTROLE), 'SEM CONTROLE') CONTROLE,
+               E.DTFABRICACAO, E.DTVAL,
+               SUM(E.ESTOQUE) ESTOQUE,
+               SUM(E.RESERVADO) RESERVADO,
+               SUM(E.ESTOQUE - E.RESERVADO) DISPONIVEL
+          FROM TGFPRO P
+          JOIN TGFEST E ON E.CODPROD = P.CODPROD
+         WHERE P.CODPROD = ${product}
+           AND E.CODEMP = ${company}
+           AND E.ATIVO = 'S'
+           AND EXISTS (
+             SELECT 1
+               FROM TGFPAR CL
+               JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = ${company}
+              WHERE PE.CODTAB = ${priceCode}
+                AND CL.CODPARC = ${partner}
+                AND CL.CODVEND = ${dashboardSellerId}
+                AND CL.CLIENTE = 'S'
+                AND CL.ATIVO = 'S'
+           )
+         GROUP BY P.REFERENCIA, E.CODLOCAL, NVL(TRIM(E.CONTROLE), 'SEM CONTROLE'), E.DTFABRICACAO, E.DTVAL
+        HAVING SUM(E.ESTOQUE) > 0 OR SUM(E.RESERVADO) > 0
+         ORDER BY E.DTVAL NULLS LAST, CONTROLE, E.CODLOCAL
+      `);
+      return Response.json({ rows });
+    }
+
     if (kind === "products") {
       const partner = numeric(url.searchParams.get("partner"));
       const priceCode = numeric(url.searchParams.get("priceCode"));
+      const company = numeric(url.searchParams.get("company"));
       const productGroups = (url.searchParams.get("groups") ?? url.searchParams.get("group") ?? "")
         .split(",")
         .map((value) => numeric(value))
         .filter((value, index, values) => value > 0 && values.indexOf(value) === index)
         .slice(0, 100);
       const brand = safeSearch(url.searchParams.get("brand"));
-      if (!partner || !priceCode) return Response.json({ error: "Selecione o cliente e a tabela." }, { status: 400 });
-      if (!productGroups.length && !brand && !search) return Response.json({ rows: [] });
+      const highlight = ["promotion", "lastPurchase", "bestSellers"].includes(url.searchParams.get("highlight") ?? "") ? url.searchParams.get("highlight")! : "";
+      const productPage = Math.max(1, Math.min(numeric(url.searchParams.get("page"), 1), 10000));
+      const productLimit = Math.max(1, Math.min(numeric(url.searchParams.get("limit"), 15), 50));
+      const firstProductRow = (productPage - 1) * productLimit + 1;
+      const lastProductRow = productPage * productLimit;
+      if (!partner || !priceCode || !company) return Response.json({ error: "Selecione o cliente, a empresa e a tabela." }, { status: 400 });
+      if (!productGroups.length && !brand && !search && !highlight) return Response.json({ rows: [] });
       const normalizedSearch = search.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const searchTokens = normalizedSearch.split(/\s+/).filter(Boolean).slice(0, 6);
       const searchableText = `TRANSLATE(UPPER(NVL(P.DESCRPROD, '') || ' ' || NVL(P.REFERENCIA, '') || ' ' || NVL(P.MARCA, '')), 'ÁÀÃÂÄÉÈÊËÍÌÎÏÓÒÕÔÖÚÙÛÜÇ', 'AAAAAEEEEIIIIOOOOOUUUUC')`;
@@ -699,6 +792,26 @@ export async function GET(request: Request) {
         : "";
       const brandFilter = !search && brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
       const groupFilter = !search && productGroups.length ? `AND P.CODGRUPOPROD IN (${productGroups.join(",")})` : "";
+      const highlightFilter = highlight === "promotion"
+        ? `AND EXISTS (SELECT 1 FROM TGFDES D WHERE D.CODPROD = P.CODPROD AND D.DTINICIAL <= TRUNC(SYSDATE) AND (D.DTFINAL IS NULL OR D.DTFINAL >= TRUNC(SYSDATE)) AND (D.CODEMP = 0 OR D.CODEMP = ${company}) AND (D.CODTAB = 0 OR D.CODTAB = ${priceCode}) AND (D.CODPARC = 0 OR D.CODPARC = ${partner}))`
+        : highlight === "lastPurchase"
+          ? `AND P.CODPROD IN (SELECT I.CODPROD FROM TGFITE I JOIN TGFCAB C ON C.NUNOTA = I.NUNOTA WHERE C.CODPARC = ${partner} AND C.TIPMOV = 'V' AND C.STATUSNOTA = 'L' AND C.DTNEG = (SELECT MAX(C2.DTNEG) FROM TGFCAB C2 WHERE C2.CODPARC = ${partner} AND C2.TIPMOV = 'V' AND C2.STATUSNOTA = 'L'))`
+          : highlight === "bestSellers"
+            ? "AND MV.CODPROD IS NOT NULL"
+            : "";
+      const productOrder = highlight === "bestSellers"
+        ? "RELEVANCIA, SALES_FREQUENCY DESC, DESCRPROD, DISPONIVEL DESC"
+        : "RELEVANCIA, DESCRPROD, DISPONIVEL DESC";
+      const bestSellersCte = highlight === "bestSellers" ? `,
+        MAIS_VENDIDOS AS (
+          SELECT I.CODPROD, SUM(I.QTDNEG) SALES_FREQUENCY
+            FROM TGFCAB C
+            JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
+           WHERE C.CODEMP = ${company} AND C.TIPMOV = 'V' AND C.STATUSNOTA = 'L'
+             AND C.DTNEG >= ADD_MONTHS(TRUNC(SYSDATE), -12)
+           GROUP BY I.CODPROD
+        )` : "";
+      const bestSellersJoin = highlight === "bestSellers" ? "JOIN MAIS_VENDIDOS MV ON MV.CODPROD = P.CODPROD" : "";
       const relevance = search
         ? `CASE
              WHEN TO_CHAR(P.CODPROD) = '${normalizedSearch}' THEN 0
@@ -710,9 +823,10 @@ export async function GET(request: Request) {
       const rows = await executeQuery(session, `
         WITH ESTOQUE AS (
           SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
+                 MAX(DTFABRICACAO) DTFABRICACAO, MAX(DTVAL) DTVAL,
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
-           WHERE CODEMP = 1 AND ATIVO = 'S'
+           WHERE CODEMP = ${company} AND ATIVO = 'S'
            GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
           HAVING SUM(ESTOQUE - RESERVADO) > 0
         ),
@@ -724,12 +838,13 @@ export async function GET(request: Request) {
             JOIN TGFTAB T ON T.NUTAB = X.NUTAB
            WHERE T.CODTAB = ${priceCode}
              AND T.DTVIGOR <= TRUNC(SYSDATE)
-        ),
+        )${bestSellersCte},
         ITENS AS (
-          SELECT P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD,
+          SELECT P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD, P.AGRUPMIN,
                  NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
-                 E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
+                 E.CODLOCAL, E.CONTROLE, E.DTFABRICACAO, E.DTVAL, E.DISPONIVEL,
                  ${priceCode} CODTAB, PR.NUTAB, PR.VLRVENDA,
+                 ${highlight === "bestSellers" ? "MV.SALES_FREQUENCY" : "0"} SALES_FREQUENCY,
                  ${relevance} RELEVANCIA,
                  ROW_NUMBER() OVER (
                    PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
@@ -742,30 +857,52 @@ export async function GET(request: Request) {
             JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
                            AND (PR.CODLOCAL = E.CODLOCAL OR PR.CODLOCAL = 0)
                            AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
+            ${bestSellersJoin}
            WHERE P.ATIVO = 'S'
              AND P.AD_MOBILIDADE = 'S'
              ${groupFilter}
              ${brandFilter}
+             ${highlightFilter}
              ${filter}
+        ),
+        PRODUTOS AS (
+          SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA,
+                 SUM(DISPONIVEL) DISPONIVEL,
+                 MAX(DISPONIVEL) LOT_DISPONIVEL,
+                 MIN(CODLOCAL) KEEP (DENSE_RANK FIRST ORDER BY DISPONIVEL DESC, DTVAL NULLS LAST, CODLOCAL, CONTROLE) CODLOCAL,
+                 MIN(CONTROLE) KEEP (DENSE_RANK FIRST ORDER BY DISPONIVEL DESC, DTVAL NULLS LAST, CODLOCAL, CONTROLE) CONTROLE,
+                 MIN(CODTAB) KEEP (DENSE_RANK FIRST ORDER BY DISPONIVEL DESC, DTVAL NULLS LAST, CODLOCAL, CONTROLE) CODTAB,
+                 MIN(NUTAB) KEEP (DENSE_RANK FIRST ORDER BY DISPONIVEL DESC, DTVAL NULLS LAST, CODLOCAL, CONTROLE) NUTAB,
+                 MIN(VLRVENDA) KEEP (DENSE_RANK FIRST ORDER BY DISPONIVEL DESC, DTVAL NULLS LAST, CODLOCAL, CONTROLE) VLRVENDA,
+                 MAX(SALES_FREQUENCY) SALES_FREQUENCY,
+                 MIN(RELEVANCIA) RELEVANCIA
+            FROM ITENS
+           WHERE RN = 1
+             AND VLRVENDA > 0
+             AND EXISTS (
+               SELECT 1
+                 FROM TGFPAR CL
+                 JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = ${company}
+                WHERE PE.CODTAB = ${priceCode}
+                  AND CL.CODPARC = ${partner}
+                  AND CL.CODVEND = ${dashboardSellerId}
+                  AND CL.CLIENTE = 'S'
+                  AND CL.ATIVO = 'S'
+             )
+           GROUP BY CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA
         )
-        SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, MARCA,
-               CODLOCAL, CONTROLE, DISPONIVEL, CODTAB, NUTAB, VLRVENDA
-          FROM ITENS
-         WHERE RN = 1
-           AND VLRVENDA > 0
-           AND EXISTS (
-             SELECT 1
-               FROM TGFPAR CL
-               JOIN TGFPAEM PE ON PE.CODPARC = CL.CODPARC AND PE.CODEMP = 1
-              WHERE PE.CODTAB = ${priceCode}
-                AND CL.CODPARC = ${partner}
-                AND CL.CODVEND = ${session.sellerId}
-                AND CL.CLIENTE = 'S'
-                AND CL.ATIVO = 'S'
-           )
-         ORDER BY RELEVANCIA, DESCRPROD, DISPONIVEL DESC
+        SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA,
+               CODLOCAL, CONTROLE, DISPONIVEL, LOT_DISPONIVEL, CODTAB, NUTAB, VLRVENDA, TOTAL_COUNT
+          FROM (
+            SELECT PRODUTOS.*, COUNT(*) OVER () TOTAL_COUNT,
+                   ROW_NUMBER() OVER (ORDER BY ${productOrder}) PAGE_ROW
+              FROM PRODUTOS
+          )
+         WHERE PAGE_ROW BETWEEN ${firstProductRow} AND ${lastProductRow}
+         ORDER BY PAGE_ROW
       `);
-      return Response.json({ rows });
+      const total = Number(rows[0]?.TOTAL_COUNT || 0);
+      return Response.json({ rows, hasMore: lastProductRow < total });
     }
 
     return Response.json({ error: "Consulta inválida." }, { status: 400 });

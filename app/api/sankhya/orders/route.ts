@@ -1,4 +1,4 @@
-import { callSankhya, executeQuery, requireSession } from "../../_lib/sankhya";
+import { callSankhya, canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 
 type OrderItem = {
   product: number;
@@ -25,41 +25,51 @@ export async function POST(request: Request) {
       operation?: number;
       negotiation?: number;
       priceCode?: number;
+      company?: number;
       items?: OrderItem[];
       observation?: string;
       dryRun?: boolean;
+      seller?: number;
     };
     const partner = Number(body.partner);
     const operation = Number(body.operation);
     const negotiation = Number(body.negotiation);
     const priceCode = Number(body.priceCode);
+    const company = Number(body.company);
     const items = body.items ?? [];
+    const seller = Number(body.seller || session.sellerId);
 
     if (!Number.isInteger(partner) || partner <= 0) throw new Error("Parceiro inválido.");
-    if (operation !== 5) throw new Error("Nesta versão, somente a TOP 5 é permitida.");
+    if (operation !== 5 && operation !== 6) throw new Error("Selecione a TOP 5 ou a TOP 6.");
+    if (operation === 6 && negotiation !== 53) throw new Error("A TOP 6 permite somente o tipo de negociação 53.");
     if (!Number.isInteger(negotiation) || negotiation <= 0) throw new Error("Selecione o tipo de negociação.");
     if (!Number.isInteger(priceCode) || priceCode <= 0) throw new Error("Selecione a tabela de preço.");
+    if (!Number.isInteger(company) || company <= 0) throw new Error("Selecione a empresa.");
     if (!items.length) throw new Error("Inclua ao menos um produto.");
     if (items.some((item) => !Number.isInteger(item.product) || item.quantity <= 0)) {
       throw new Error("Há itens com quantidade inválida.");
+    }
+    if (!Number.isInteger(seller) || seller <= 0) throw new Error("Vendedor inválido.");
+    if (seller !== session.sellerId && !(await canAnalyzeOtherSellers(session))) {
+      throw new Error("Você não possui permissão para criar pedidos para este vendedor.");
     }
 
     const partnerRows = await executeQuery(session, `
       SELECT P.CODPARC, P.CODVEND, E.CODEMP, E.GRUPOICMS, E.CODTAB
         FROM TGFPAR P
-        JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+        JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = ${company}
        WHERE P.CODPARC = ${partner}
          AND P.CLIENTE = 'S'
          AND P.ATIVO = 'S'
-         AND P.CODVEND = ${session.sellerId}
+         AND P.CODVEND = ${seller}
     `);
     const partnerData = partnerRows[0] as Record<string, unknown> | undefined;
-    if (!partnerData) throw new Error("Cliente fora da carteira ou sem cadastro na empresa 1.");
+    if (!partnerData) throw new Error("Cliente fora da carteira ou sem Grupo ICMS/ISS cadastrado na empresa selecionada.");
 
     const validOperations = await executeQuery(session, `
       SELECT O.CODTIPOPER, O.DHALTER, O.TIPMOV
         FROM TGFTOP O
-       WHERE O.CODTIPOPER = 5
+       WHERE O.CODTIPOPER = ${operation}
          AND O.DHALTER = (
            SELECT MAX(O2.DHALTER)
              FROM TGFTOP O2
@@ -68,25 +78,26 @@ export async function POST(request: Request) {
          AND O.TIPMOV = 'P'
     `);
     const operationData = validOperations[0] as Record<string, unknown> | undefined;
-    if (!operationData) throw new Error("A TOP 5 não está configurada como Pedido de venda.");
+    if (!operationData) throw new Error(`A TOP ${operation} não está configurada como Pedido de venda.`);
 
     const allowedTables = await executeQuery(session, `
       SELECT DISTINCT N.CODTAB
         FROM TGFPAEM E
         JOIN TGFNTA N ON N.CODTAB = E.CODTAB
-       WHERE E.CODEMP = 1
+       WHERE E.CODEMP = ${company}
          AND E.CODPARC = ${partner}
          AND E.CODTAB = ${priceCode}
          AND N.ATIVO = 'S'
          AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
     `);
-    if (!allowedTables.length) throw new Error("Tabela de preço não cadastrada para este cliente na empresa 1.");
+    if (!allowedTables.length) throw new Error("Tabela de preço não cadastrada para o Grupo ICMS/ISS deste cliente na empresa selecionada.");
 
     const validNegotiations = await executeQuery(session, `
       SELECT V.CODTIPVENDA, V.DHALTER
         FROM TGFTPV V
        WHERE V.CODTIPVENDA = ${negotiation}
          AND V.ATIVO = 'S'
+         AND NVL(V.AD_MOBILIDADE, 'N') = 'S'
          AND V.DHALTER = (
            SELECT MAX(V2.DHALTER)
              FROM TGFTPV V2
@@ -102,7 +113,7 @@ export async function POST(request: Request) {
         SELECT CODPROD, CODLOCAL, CONTROLE,
                SUM(ESTOQUE - RESERVADO) DISPONIVEL
           FROM TGFEST
-         WHERE CODEMP = 1
+         WHERE CODEMP = ${company}
            AND ATIVO = 'S'
            AND CODPROD IN (${productCodes})
          GROUP BY CODPROD, CODLOCAL, CONTROLE
@@ -119,7 +130,7 @@ export async function POST(request: Request) {
            AND X.CODPROD IN (${productCodes})
       ),
       ITENS AS (
-        SELECT P.CODPROD, E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
+        SELECT P.CODPROD, P.AGRUPMIN, E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
                PR.NUTAB, PR.VLRVENDA,
                ROW_NUMBER() OVER (
                  PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
@@ -135,7 +146,7 @@ export async function POST(request: Request) {
          WHERE P.ATIVO = 'S'
            AND P.AD_MOBILIDADE = 'S'
       )
-      SELECT CODPROD, CODLOCAL, CONTROLE, DISPONIVEL, NUTAB, VLRVENDA
+      SELECT CODPROD, AGRUPMIN, CODLOCAL, CONTROLE, DISPONIVEL, NUTAB, VLRVENDA
         FROM ITENS
        WHERE RN = 1
          AND VLRVENDA > 0
@@ -151,6 +162,10 @@ export async function POST(request: Request) {
       if (!current) throw new Error(`Produto ${item.product} indisponível ou não habilitado para mobilidade.`);
       if (item.quantity > Number(current.DISPONIVEL)) {
         throw new Error(`Estoque insuficiente para o produto ${item.product}.`);
+      }
+      const grouping = Math.max(Number(current.AGRUPMIN || 1), 1);
+      if (Math.abs(item.quantity / grouping - Math.round(item.quantity / grouping)) > 0.0001) {
+        throw new Error(`O produto ${item.product} deve ser negociado em múltiplos de ${grouping}.`);
       }
       if (item.priceTable !== Number(current.NUTAB)) {
         throw new Error(`A tabela do produto ${item.product} mudou. Atualize o pedido.`);
@@ -174,13 +189,13 @@ export async function POST(request: Request) {
           TIPMOV: { $: "P" },
           DTNEG: { $: today },
           DTENTSAI: { $: today },
-          CODEMP: { $: String(partnerData.CODEMP) },
+          CODEMP: { $: String(company) },
           CODPARC: { $: String(partner) },
-          CODTIPOPER: { $: "5" },
+          CODTIPOPER: { $: String(operation) },
           DHTIPOPER: { $: sankhyaDateTime(operationData.DHALTER) },
           CODTIPVENDA: { $: String(negotiation) },
           DHTIPVENDA: { $: sankhyaDateTime(negotiationData.DHALTER) },
-          CODVEND: { $: String(session.sellerId) },
+          CODVEND: { $: String(seller) },
           CODNAT: { $: "1010000" },
           CODCENCUS: { $: "0" },
           CODPROJ: { $: "0" },
@@ -214,14 +229,14 @@ export async function POST(request: Request) {
         validation: {
           partner,
           operation,
-          company: Number(partnerData.CODEMP),
+          company,
           groupIcms: Number(partnerData.GRUPOICMS || 0),
           priceCode,
           negotiation,
           operationDate: sankhyaDateTime(operationData.DHALTER),
           negotiationDate: sankhyaDateTime(negotiationData.DHALTER),
           nature: 1010000,
-          seller: session.sellerId,
+          seller,
           products: items.length,
           status: "ready",
         },

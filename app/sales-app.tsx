@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDollarSign,
+  Clock3,
   ClipboardList,
   CloudCheck,
   CloudOff,
@@ -65,14 +66,29 @@ type Product = ApiRow & {
   CODLOCAL: number;
   CONTROLE: string;
   DISPONIVEL: number;
+  LOT_DISPONIVEL?: number;
   NUTAB: number;
   VLRVENDA: number;
+  AGRUPMIN?: number | null;
+  IMAGEM?: string | null;
   DESCRGRUPOPROD?: string;
   MARCA?: string;
+};
+type ProductLot = ApiRow & {
+  REFERENCIA?: string | null;
+  CODLOCAL: number;
+  CONTROLE: string;
+  DTFABRICACAO?: string | null;
+  DTVAL?: string | null;
+  ESTOQUE: number;
+  RESERVADO: number;
+  DISPONIVEL: number;
 };
 type CartItem = Product & { quantity: number };
 type PriceTable = { CODTAB: number; NOMETAB: string };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
+type OrderOperation = { CODTIPOPER: number; DESCROPER: string };
+type OrderCompany = { CODEMP: number; NOMEFANTASIA: string; GRUPOICMS?: number | null; CODTAB?: number | null };
 type ProductGroup = {
   CODGRUPOPROD: number;
   DESCRGRUPOPROD: string;
@@ -96,8 +112,11 @@ type AppHistoryState = {
 type OrderDraft = {
   id: string;
   updatedAt: number;
+  sellerId?: number;
   phase: OrderPhase;
   partner: Partner;
+  companyCode?: number;
+  operation?: number;
   priceCode: number;
   priceName: string;
   negotiation: number;
@@ -191,6 +210,7 @@ const dashboardDetailKinds: Record<DashboardDetailType, string> = {
 };
 
 const OFFLINE_SESSION_KEY = "norte-sul-vendas:offline-session-enabled";
+const PRODUCT_PAGE_SIZE = 15;
 
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -288,6 +308,159 @@ async function imageDataUrl(url: string) {
     reader.onerror = () => resolve("");
     reader.readAsDataURL(blob);
   });
+}
+
+async function shareDraftOrderReport(draft: OrderDraft, sellerName: string) {
+  const isMobileDevice = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const desktopReportWindow = isMobileDevice ? null : window.open("about:blank", "_blank");
+  const { jsPDF } = await import("jspdf");
+  const pdf = new jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 10;
+  const width = pageWidth - margin * 2;
+  const black = [0, 0, 0] as const;
+  const total = draft.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0);
+  const fileBase = `${draft.partner.NOMEPARC}-${draft.id}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+  const fileName = `pedido-${fileBase || "rascunho"}.pdf`;
+  let y = 15;
+
+  const pageHeader = (continuation = false) => {
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(10);
+    pdf.setTextColor(...black);
+    pdf.text("N O R T E   S U L   S E M E N T E S   L T D A", pageWidth / 2, 14, { align: "center" });
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(6.8);
+    pdf.text("Endereço: MARAJA, PLANALTO, -- - JACIARA - MT - N: 843", margin + 10, 25);
+    pdf.setFont("helvetica", "bold");
+    pdf.text("CNPJ:", margin + 10, 29.2);
+    pdf.setFont("helvetica", "normal");
+    pdf.text("05961048000180", margin + 19, 29.2);
+    pdf.setFont("helvetica", "bold");
+    pdf.text("Insc. Estad.:", margin + 59, 29.2);
+    pdf.setFont("helvetica", "normal");
+    pdf.text("132376237", margin + 77, 29.2);
+    if (continuation) {
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      pdf.text("ITENS DO PEDIDO", margin, 39);
+      y = 45;
+    } else y = 41;
+  };
+  const addPage = () => {
+    pdf.addPage();
+    pageHeader(true);
+  };
+  const ensureSpace = (height: number) => {
+    if (y + height > pageHeight - 14) addPage();
+  };
+  const section = (title: string) => {
+    ensureSpace(12);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(10);
+    pdf.setTextColor(...black);
+    pdf.text(title, pageWidth / 2, y, { align: "center" });
+    y += 12;
+  };
+  const labelValue = (label: string, value: string, x: number, rowY: number) => {
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7);
+    pdf.setTextColor(...black);
+    pdf.text(`${label}:`, x, rowY);
+    pdf.setFont("helvetica", "normal");
+    pdf.text(value || "--", x + pdf.getTextWidth(`${label}: `), rowY);
+  };
+  const cell = (x: number, cellY: number, cellWidth: number, cellHeight: number, value: string | string[], align: "left" | "right" | "center" = "left", bold = false) => {
+    pdf.setDrawColor(...black);
+    pdf.roundedRect(x, cellY, cellWidth, cellHeight, 0.8, 0.8, "S");
+    pdf.setFont("helvetica", bold ? "bold" : "normal");
+    pdf.setFontSize(6.5);
+    pdf.setTextColor(...black);
+    pdf.text(value, align === "left" ? x + 2 : align === "right" ? x + cellWidth - 2 : x + cellWidth / 2, cellY + 5.2, { align });
+  };
+
+  pageHeader();
+  section("D A D O S   D O   C L I E N T E");
+  labelValue("Cliente", draft.partner.NOMEPARC, margin + 10, y);
+  y += 5;
+  labelValue("Raz. Social", draft.partner.NOMEPARC, margin + 10, y);
+  y += 5;
+  labelValue("Endereço", "--", margin + 10, y);
+  y += 5;
+  labelValue("CEP", "--", margin + 10, y);
+  labelValue("Fone", "--", margin + 52, y);
+  labelValue("Email", "--", margin + 93, y);
+  y += 5;
+  labelValue("Cod. Parc.", String(draft.partner.CODPARC), margin + 10, y);
+  labelValue("CNPJ", String(draft.partner.CGCCPF || "--"), margin + 52, y);
+  labelValue("Insc. Estad.", "--", margin + 101, y);
+  y += 22;
+
+  section("I N F O R M A Ç Õ E S   D A   N E G O C I A Ç Ã O");
+  const dateBoxX = pageWidth - margin - 72;
+  cell(dateBoxX, y, 29, 10, "Data de negociação", "center", true);
+  cell(dateBoxX + 29, y, 43, 10, new Date(draft.updatedAt).toLocaleDateString("pt-BR"), "center");
+  y += 22;
+
+  const headers = ["Cód.", "Descrição", "Un.", "Qtd", "Vlr Unit", "Impostos", "Valor Total"];
+  const columns = [16, 75, 13, 13, 25, 25, 28];
+  const drawTableHeader = () => {
+    ensureSpace(10);
+    let x = margin;
+    headers.forEach((header, index) => {
+      cell(x, y, columns[index], 8, header, "center", true);
+      x += columns[index];
+    });
+    y += 9;
+  };
+  drawTableHeader();
+  draft.cart.forEach((item, index) => {
+    const description = pdf.splitTextToSize(item.DESCRPROD, columns[1] - 6) as string[];
+    const height = Math.max(8, description.length * 3.5 + 3);
+    if (y + height > pageHeight - 14) {
+      addPage();
+      drawTableHeader();
+    }
+    const values = [String(item.CODPROD), description, item.CODVOL, item.quantity.toLocaleString("pt-BR"), money(Number(item.VLRVENDA)), "R$ 0,00", money(item.quantity * Number(item.VLRVENDA))];
+    let x = margin;
+    values.forEach((value, valueIndex) => {
+      cell(x, y, columns[valueIndex], height, value as string | string[], valueIndex >= 3 ? "right" : valueIndex === 1 ? "left" : "center");
+      x += columns[valueIndex];
+    });
+    y += height;
+  });
+  y += 8;
+  ensureSpace(45);
+  const paymentWidth = 80;
+  const detailsHeight = 44;
+  pdf.setDrawColor(...black);
+  pdf.roundedRect(margin, y, paymentWidth, detailsHeight, .8, .8, "S");
+  labelValue("Cond. de pagamento", draft.negotiationName || "--", margin + 2, y + 6);
+  labelValue("Vendedor", sellerName || "--", margin + 2, y + 16);
+  labelValue("OBS", draft.observation || "--", margin + 2, y + 26);
+  const summaryX = pageWidth - margin - 72;
+  cell(summaryX, y, 38, 9, "Total de Mercadorias", "left", true);
+  cell(summaryX + 38, y, 34, 9, money(total), "right");
+  cell(summaryX, y + 9, 38, 9, "Total de imposto", "left", true);
+  cell(summaryX + 38, y + 9, 34, 9, "R$ 0,00", "right");
+  cell(summaryX, y + 18, 38, 9, "Total", "left", true);
+  cell(summaryX + 38, y + 18, 34, 9, money(total), "right");
+
+  const reportBlob = pdf.output("blob");
+  if (desktopReportWindow) {
+    const reportUrl = URL.createObjectURL(reportBlob);
+    desktopReportWindow.location.replace(reportUrl);
+    window.setTimeout(() => URL.revokeObjectURL(reportUrl), 60_000);
+    return;
+  }
+  const file = new File([reportBlob], fileName, { type: "application/pdf" });
+  const canShareFile = typeof navigator !== "undefined" && typeof navigator.share === "function" && (!navigator.canShare || navigator.canShare({ files: [file] }));
+  if (canShareFile) {
+    await navigator.share({ files: [file], title: "Pedido de venda", text: `Pedido de ${draft.partner.NOMEPARC}` });
+    return;
+  }
+  pdf.save(fileName);
 }
 
 async function downloadSalesReport(input: {
@@ -831,11 +1004,31 @@ const normalizeProductSearch = (value: unknown) =>
     .toLocaleLowerCase("pt-BR")
     .trim();
 
+const productImageUrl = (product: Product) => {
+  return `/api/sankhya/product-image?product=${encodeURIComponent(String(product.CODPROD))}`;
+};
+
 const sankhyaDate = (value: unknown) => {
   const raw = String(value ?? "");
   if (/^\d{8}/.test(raw)) return `${raw.slice(0, 2)}/${raw.slice(2, 4)}/${raw.slice(4, 8)}`;
   return raw || "Hoje";
 };
+
+const orderDeadlineDays = (from: unknown, to: unknown) => {
+  const parse = (value: unknown) => {
+    const raw = String(value ?? "");
+    const compact = raw.match(/^(\d{2})(\d{2})(\d{4})/);
+    if (compact) return Date.UTC(Number(compact[3]), Number(compact[2]) - 1, Number(compact[1]));
+    const brazilian = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (brazilian) return Date.UTC(Number(brazilian[3]), Number(brazilian[2]) - 1, Number(brazilian[1]));
+    return null;
+  };
+  const start = parse(from);
+  const end = parse(to);
+  return start == null || end == null ? null : Math.max(0, Math.round((end - start) / 86400000));
+};
+
+const orderBillingStatus = (value: unknown) => String(value ?? "").trim().toUpperCase() === "S" ? "Pendente" : "Faturado";
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -911,6 +1104,7 @@ export function SalesApp() {
   const [orders, setOrders] = useState<ApiRow[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
+  const [orderClients, setOrderClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
   const [offlineData, setOfflineData] = useState<OfflineSnapshot | null>(null);
   const [online, setOnline] = useState(true);
@@ -923,6 +1117,8 @@ export function SalesApp() {
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [startingPartner, setStartingPartner] = useState<Partner | null>(null);
+  const [orderSellerId, setOrderSellerId] = useState<number | null>(null);
+  const [orderSellerName, setOrderSellerName] = useState("");
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [toast, setToast] = useState("");
@@ -1027,12 +1223,13 @@ export function SalesApp() {
     };
   }, [authenticated, online, userId]);
 
-  const loadOrders = async (dateFrom = currentMonthStart(), dateTo = inputDate(new Date())) => {
+  const loadOrders = async (dateFrom = currentMonthStart(), dateTo = inputDate(new Date()), requestedSellerId = sellerId) => {
     setLoadingOrders(true);
     try {
       const params = new URLSearchParams({ kind: "orders" });
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
+      if (requestedSellerId) params.set("seller", String(requestedSellerId));
       const result = await api<{ rows: ApiRow[]; user?: string; userId?: number; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
       setOrders(result.rows);
       if (result.user) setUser(result.user);
@@ -1041,8 +1238,9 @@ export function SalesApp() {
       if (result.sellerName) setSellerName(String(result.sellerName));
       setAuthenticated(true);
     } catch (error) {
-      const cached = offlineData
-        ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot());
+      const cached = requestedSellerId === sellerId
+        ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot())
+        : null;
       if (cached) {
         applySnapshot(cached, false);
         setOrders(filterOrdersByPeriod(cached.orders, dateFrom, dateTo));
@@ -1093,16 +1291,20 @@ export function SalesApp() {
     setInstallPrompt(null);
   };
 
-  const loadPortfolio = async () => {
-    if (clients.length) return clients;
+  const loadPortfolio = async (requestedSellerId = sellerId) => {
+    const isOwnPortfolio = requestedSellerId === sellerId;
+    if (isOwnPortfolio && clients.length) return clients;
     setLoadingClients(true);
     try {
-      const result = await api<{ rows: Client[] }>("/api/sankhya/data?kind=portfolio");
-      setClients(result.rows);
+      const params = new URLSearchParams({ kind: "portfolio" });
+      if (requestedSellerId) params.set("seller", String(requestedSellerId));
+      const result = await api<{ rows: Client[] }>(`/api/sankhya/data?${params}`);
+      if (isOwnPortfolio) setClients(result.rows);
       return result.rows;
     } catch (error) {
-      const cached = offlineData
-        ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot());
+      const cached = isOwnPortfolio
+        ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot())
+        : null;
       if (cached) {
         setOfflineData(cached);
         setClients(cached.clients as Client[]);
@@ -1120,10 +1322,13 @@ export function SalesApp() {
     await loadPortfolio();
   };
 
-  const openNewOrder = async () => {
+  const openNewOrder = async (requestedSellerId = sellerId, requestedSellerName = requestedSellerId === sellerId ? sellerName : "") => {
+    setOrderSellerId(requestedSellerId);
+    setOrderSellerName(requestedSellerName);
+    setOrderClients([]);
     pushHistoryView("client-picker", screen === "new" ? "orders" : screen);
     setClientPickerOpen(true);
-    await loadPortfolio();
+    setOrderClients(await loadPortfolio(requestedSellerId));
   };
 
   const draftKey = sellerId ? `norte-sul-vendas:drafts:${sellerId}` : "";
@@ -1317,27 +1522,48 @@ export function SalesApp() {
       />
       <main className="main-shell">
         {screen === "home" ? (
-          <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} />
+          <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} canAnalyzeSellers={canMonitorSales} />
         ) : screen === "general-sales" ? (
           canMonitorSales
             ? <GeneralSalesScreen online={online} />
-            : <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} />
+            : <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} canAnalyzeSellers={canMonitorSales} />
         ) : screen === "orders" ? (
           <OrdersScreen
             orders={orders}
             loading={loadingOrders}
             drafts={drafts}
+            online={online}
+            canAnalyzeSellers={canMonitorSales}
+            currentSellerId={sellerId}
+            currentSellerName={sellerName || user}
             onNew={openNewOrder}
+            onDeleteDraft={(id) => {
+              removeDraft(id);
+              setToast("Rascunho excluído.");
+            }}
+            onDraftSent={(id, draftId) => {
+              removeDraft(draftId);
+              setToast(`Pedido ${id || ""} enviado ao Sankhya com sucesso.`);
+              loadOrders();
+            }}
             onResume={(draft) => {
               setActiveDraft(draft);
               setStartingPartner(draft.partner);
+              setOrderSellerId(draft.sellerId ?? sellerId);
               pushHistoryView("new");
               setScreen("new");
             }}
             onPeriodChange={loadOrders}
           />
         ) : screen === "clients" ? (
-          <ClientsScreen clients={clients} loading={loadingClients} />
+          <ClientsScreen
+            clients={clients}
+            loading={loadingClients}
+            online={online}
+            canAnalyzeSellers={canMonitorSales}
+            currentSellerId={sellerId}
+            currentSellerName={sellerName || user}
+          />
         ) : screen === "communication" ? (
           <CommunicationScreen currentUserId={userId} currentUserName={user} online={online} />
         ) : screen === "more" ? (
@@ -1360,11 +1586,21 @@ export function SalesApp() {
           <NewOrderV2
             partner={startingPartner!}
             draft={activeDraft}
+            actingSellerId={orderSellerId ?? sellerId}
+            ownSellerId={sellerId}
             offlineData={offlineData}
             online={online}
             onSaveDraft={saveDraft}
             onBack={() => {
               window.history.back();
+            }}
+            onSaved={() => {
+              setToast("Rascunho salvo localmente.");
+              replaceHistoryView("orders");
+              setScreen("orders");
+              setActiveDraft(null);
+              setStartingPartner(null);
+              setOrderSellerId(null);
             }}
             onSent={(id, draftId) => {
               removeDraft(draftId);
@@ -1373,6 +1609,7 @@ export function SalesApp() {
               setScreen("orders");
               setActiveDraft(null);
               setStartingPartner(null);
+              setOrderSellerId(null);
               loadOrders();
             }}
           />
@@ -1393,9 +1630,10 @@ export function SalesApp() {
       )}
       {clientPickerOpen && (
         <ClientPickerModal
-          clients={clients}
+          clients={orderClients}
           loading={loadingClients}
-          onClose={() => window.history.back()}
+          sellerName={orderSellerName || sellerName}
+          onClose={() => { setOrderSellerId(null); setOrderSellerName(""); window.history.back(); }}
           onSelect={(client) => {
             setStartingPartner(client);
             setActiveDraft(null);
@@ -1835,7 +2073,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
   );
 }
 
-function HomeScreen({ sellerId, sellerName, online }: { sellerId: number; sellerName: string; online: boolean }) {
+function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { sellerId: number; sellerName: string; online: boolean; canAnalyzeSellers: boolean }) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [dashboardSellers, setDashboardSellers] = useState<DashboardSeller[]>([]);
   const [selectedSellerId, setSelectedSellerId] = useState(sellerId);
@@ -1866,7 +2104,10 @@ function HomeScreen({ sellerId, sellerName, online }: { sellerId: number; seller
   }, [sellerId]);
 
   useEffect(() => {
-    if (!online) return;
+    if (!online || !canAnalyzeSellers) {
+      setDashboardSellers([]);
+      return;
+    }
     let cancelled = false;
     void api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers", { cache: "no-store" })
       .then((result) => {
@@ -1877,7 +2118,7 @@ function HomeScreen({ sellerId, sellerName, online }: { sellerId: number; seller
         if (!cancelled) setDashboardSellers([]);
       });
     return () => { cancelled = true; };
-  }, [online]);
+  }, [online, canAnalyzeSellers]);
 
   const selectCurrentMonth = () => {
     const today = new Date();
@@ -2031,8 +2272,19 @@ function HomeScreen({ sellerId, sellerName, online }: { sellerId: number; seller
   useEffect(() => {
     let cancelled = false;
     const loadDashboard = async () => {
-      setLoading(true);
-      setDashboard(null);
+      let cached: DashboardData | null = null;
+      try {
+        cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as DashboardData | null;
+      } catch {
+        cached = null;
+      }
+      if (cached) {
+        setDashboard(cached);
+        setLoading(false);
+      } else {
+        setLoading(true);
+        setDashboard(null);
+      }
       setError("");
       try {
         if (!online) throw new Error("OFFLINE");
@@ -2043,7 +2295,6 @@ function HomeScreen({ sellerId, sellerName, online }: { sellerId: number; seller
         localStorage.setItem(cacheKey, JSON.stringify(result));
       } catch {
         try {
-          const cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as DashboardData | null;
           if (!cancelled && cached) {
             setDashboard(cached);
             setError("Exibindo o último resumo salvo neste aparelho.");
@@ -2381,26 +2632,62 @@ function OrdersScreen({
   orders,
   loading,
   drafts,
+  online,
+  canAnalyzeSellers,
+  currentSellerId,
+  currentSellerName,
   onNew,
+  onDeleteDraft,
+  onDraftSent,
   onResume,
   onPeriodChange,
 }: {
   orders: ApiRow[];
   loading: boolean;
   drafts: OrderDraft[];
-  onNew: () => void;
+  online: boolean;
+  canAnalyzeSellers: boolean;
+  currentSellerId: number;
+  currentSellerName: string;
+  onNew: (sellerId?: number, sellerName?: string) => void;
+  onDeleteDraft: (id: string) => void;
+  onDraftSent: (id: string | undefined, draftId: string) => void;
   onResume: (draft: OrderDraft) => void;
-  onPeriodChange: (dateFrom?: string, dateTo?: string) => void;
+  onPeriodChange: (dateFrom?: string, dateTo?: string, sellerId?: number) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Todos");
   const [showPeriod, setShowPeriod] = useState(false);
   const [dateFrom, setDateFrom] = useState(() => currentMonthStart());
   const [dateTo, setDateTo] = useState(() => inputDate(new Date()));
+  const [selectedSellerId, setSelectedSellerId] = useState(currentSellerId);
+  const [sellers, setSellers] = useState<DashboardSeller[]>([]);
+  const [draftMenuId, setDraftMenuId] = useState<string | null>(null);
+  const [draftPendingDeletion, setDraftPendingDeletion] = useState<OrderDraft | null>(null);
+  const [draftPendingSend, setDraftPendingSend] = useState<OrderDraft | null>(null);
+  const [sendingDraft, setSendingDraft] = useState(false);
+  const [draftSendError, setDraftSendError] = useState("");
+  const [reportingDraftId, setReportingDraftId] = useState<string | null>(null);
+  const [draftReportError, setDraftReportError] = useState("");
+  useEffect(() => setSelectedSellerId(currentSellerId), [currentSellerId]);
+  useEffect(() => {
+    if (!draftMenuId) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".draft-actions")) setDraftMenuId(null);
+    };
+    document.addEventListener("click", closeMenu);
+    return () => document.removeEventListener("click", closeMenu);
+  }, [draftMenuId]);
+  useEffect(() => {
+    if (!canAnalyzeSellers) return;
+    api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers")
+      .then((result) => setSellers(result.rows))
+      .catch(() => setSellers([]));
+  }, [canAnalyzeSellers]);
   const applySuggestedPeriod = (from: string, to: string) => {
     setDateFrom(from);
     setDateTo(to);
-    onPeriodChange(from, to);
+    onPeriodChange(from, to, selectedSellerId);
     setShowPeriod(false);
   };
   const lastThreeMonthsStart = () => {
@@ -2416,9 +2703,52 @@ function OrdersScreen({
   });
   const filteredDrafts = drafts.filter((draft) => {
     const matchesSearch = `${draft.partner.NOMEPARC} ${draft.partner.CODPARC}`.toLowerCase().includes(query.toLowerCase());
-    return matchesSearch && (filter === "Todos" || filter === "Rascunhos");
+    return selectedSellerId === currentSellerId && matchesSearch && (filter === "Todos" || filter === "Rascunhos");
   });
   const total = orders.reduce((sum, order) => sum + Number(order.VLRNOTA || 0), 0);
+  const sendDraft = async () => {
+    if (!draftPendingSend) return;
+    setSendingDraft(true);
+    setDraftSendError("");
+    try {
+      const result = await api<{ orderId?: string }>("/api/sankhya/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partner: draftPendingSend.partner.CODPARC,
+          operation: Number(draftPendingSend.operation),
+          negotiation: Number(draftPendingSend.negotiation),
+          priceCode: Number(draftPendingSend.priceCode),
+          company: Number(draftPendingSend.companyCode),
+          seller: Number(draftPendingSend.sellerId || currentSellerId),
+          observation: draftPendingSend.observation,
+          items: draftPendingSend.cart.map((item) => ({
+            product: Number(item.CODPROD), quantity: item.quantity, unitPrice: Number(item.VLRVENDA),
+            volume: item.CODVOL, location: Number(item.CODLOCAL), control: item.CONTROLE, priceTable: Number(item.NUTAB),
+          })),
+        }),
+      });
+      onDraftSent(result.orderId, draftPendingSend.id);
+      setDraftPendingSend(null);
+    } catch (err) {
+      setDraftSendError(err instanceof Error ? err.message : "Falha no envio.");
+    } finally {
+      setSendingDraft(false);
+    }
+  };
+  const reportDraft = async (draft: OrderDraft) => {
+    setReportingDraftId(draft.id);
+    setDraftReportError("");
+    try {
+      await shareDraftOrderReport(draft, currentSellerName);
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setDraftReportError(err instanceof Error ? err.message : "Não foi possível gerar o relatório.");
+      }
+    } finally {
+      setReportingDraftId(null);
+    }
+  };
 
   return (
     <div className="page orders-page">
@@ -2429,8 +2759,22 @@ function OrdersScreen({
       </header>
       <header className="desktop-header">
         <div><span className="eyebrow">Operação comercial</span><h1>Pedidos</h1><p>Acompanhe sua carteira e crie novas vendas.</p></div>
-        <button className="primary" onClick={onNew}><Plus size={19} /> Novo pedido</button>
+        <button className="primary" onClick={() => onNew(selectedSellerId, sellers.find((seller) => Number(seller.CODVEND) === selectedSellerId)?.APELIDO)}><Plus size={19} /> Novo pedido</button>
       </header>
+
+      {canAnalyzeSellers && sellers.length > 0 && (
+        <section className="orders-seller-switch">
+          <UsersRound size={20} />
+          <label><span>Consultar pedidos e criar vendas para</span><select value={selectedSellerId} onChange={(event) => {
+            const nextSellerId = Number(event.target.value);
+            setSelectedSellerId(nextSellerId);
+            onPeriodChange(dateFrom, dateTo, nextSellerId);
+          }}>
+            {sellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
+          </select></label>
+          <small>Os pedidos e a carteira exibidos serão do vendedor selecionado.</small>
+        </section>
+      )}
 
       <div className="search-row">
         <label className="search-box"><Search size={21} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pedido ou cliente" /></label>
@@ -2452,11 +2796,11 @@ function OrdersScreen({
           <button className="secondary" onClick={() => {
             setDateFrom(currentMonthStart());
             setDateTo(inputDate(new Date()));
-            onPeriodChange(currentMonthStart(), inputDate(new Date()));
+            onPeriodChange(currentMonthStart(), inputDate(new Date()), selectedSellerId);
             setShowPeriod(false);
           }}>Este mês</button>
           <button className="primary" disabled={!dateFrom || !dateTo || dateFrom > dateTo} onClick={() => {
-            onPeriodChange(dateFrom, dateTo);
+            onPeriodChange(dateFrom, dateTo, selectedSellerId);
             setShowPeriod(false);
           }}>Aplicar</button>
         </section>
@@ -2471,37 +2815,97 @@ function OrdersScreen({
       <section className="metrics">
         <Metric icon={<CircleDollarSign />} label="Total em carteira" value={money(total)} />
         <Metric icon={<Send />} label="Enviados" value={String(orders.filter((o) => o.STATUSNOTA === "L").length)} />
-        <Metric blue icon={<FileText />} label="Rascunhos" value={String(drafts.length)} />
+        <Metric blue icon={<FileText />} label="Rascunhos" value={String(filteredDrafts.length)} />
       </section>
 
       <section className="orders-section">
         <div className="section-heading"><div><span className="eyebrow">Movimentações</span><h2>Pedidos recentes</h2></div><button>Ver todos <ArrowRight size={17} /></button></div>
-        <div className="order-table-head"><span>Cliente</span><span>Data</span><span>Valor</span><span>Status</span></div>
         <div className="order-list">
           {filteredDrafts.map((draft) => (
-            <button className="order-card draft-card" key={draft.id} onClick={() => onResume(draft)}>
+            <article className="order-card draft-card" key={draft.id}>
               <span className="order-icon"><FileText /></span>
               <div className="order-client"><strong>{draft.partner.NOMEPARC}</strong><small>Rascunho automático</small></div>
               <div className="order-date"><small>{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</small></div>
               <div className="order-total"><strong>{money(draft.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0))}</strong></div>
-              <span className="status draft"><FileText size={15} /> Continuar</span>
-            </button>
+              <button className="status draft" onClick={() => onResume(draft)}><FileText size={15} /> Continuar</button>
+              <div className="draft-actions" onClick={(event) => event.stopPropagation()}>
+                <button className="draft-menu-trigger" aria-label="Mais opções do rascunho" aria-expanded={draftMenuId === draft.id} onClick={() => setDraftMenuId((current) => current === draft.id ? null : draft.id)}>•••</button>
+                {draftMenuId === draft.id && (
+                  <div className="draft-menu" role="menu">
+                    <button role="menuitem" className="draft-report" disabled={reportingDraftId === draft.id} onClick={() => {
+                      setDraftMenuId(null);
+                      void reportDraft(draft);
+                    }}>{reportingDraftId === draft.id ? <LoaderCircle className="spin" size={14} /> : <FileText size={14} />} Relatório do pedido</button>
+                    <button role="menuitem" className="send-draft" disabled={!online || !draft.cart.length} onClick={() => {
+                      setDraftPendingSend(draft);
+                      setDraftSendError("");
+                      setDraftMenuId(null);
+                    }}><Send size={14} /> Enviar</button>
+                    <button role="menuitem" className="danger" onClick={() => {
+                      setDraftPendingDeletion(draft);
+                      setDraftMenuId(null);
+                    }}>Excluir rascunho</button>
+                  </div>
+                )}
+              </div>
+            </article>
           ))}
           {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando pedidos...</div> : filtered.map((order, index) => (
-            <article className="order-card" key={String(order.NUNOTA)}>
+            <article className="order-card order-card-rich" key={String(order.NUNOTA)}>
               <span className="order-icon">{index % 2 ? <Leaf /> : <Building2 />}</span>
-              <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><small>PED-{String(order.NUNOTA)}</small></div>
-              <div className="order-date"><small>{sankhyaDate(order.DTNEG)}</small></div>
-              <div className="order-total"><strong>{money(Number(order.VLRNOTA || 0))}</strong></div>
-              <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
-                {order.STATUSNOTA === "L" ? <><Send size={15} /> Enviado</> : <>Aguardando</>}
-              </span>
+              <div className="order-rich-content">
+                <div className="order-rich-head">
+                  <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)}</span></div></div>
+                  <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
+                    {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
+                  </span>
+                </div>
+                <div className="order-rich-meta">
+                  <span><CalendarDays size={22} /><span><small>Emissão</small>{sankhyaDate(order.DTNEG)}</span></span>
+                  <i />
+                  <span><Clock3 size={22} /><span><small>Prazo</small>{order.DTENTSAI ? `${orderDeadlineDays(order.DTNEG, order.DTENTSAI) ?? "—"} dias` : "Não informado"}</span></span>
+                  <i />
+                  <span><FileText size={22} /><span><small>Faturamento</small>{orderBillingStatus(order.PENDENTE)}</span></span>
+                </div>
+                <div className="order-rich-total">{money(Number(order.VLRNOTA || 0))}</div>
+              </div>
             </article>
           ))}
           {!loading && !filtered.length && !filteredDrafts.length && <div className="empty-state">Nenhum pedido encontrado.</div>}
         </div>
       </section>
-      <button className="mobile-fab" onClick={onNew}><Plus size={23} /> Novo pedido</button>
+      {draftReportError && <div className="global-error">{draftReportError}</div>}
+      {draftPendingDeletion && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Excluir rascunho">
+          <div className="confirm-modal draft-delete-modal">
+            <button className="modal-close" onClick={() => setDraftPendingDeletion(null)} aria-label="Fechar"><X size={20} /></button>
+            <span className="confirm-icon draft-delete-icon"><FileText size={27} /></span>
+            <h2>Excluir este rascunho?</h2>
+            <p>O pedido de <strong>{draftPendingDeletion.partner.NOMEPARC}</strong> será removido deste dispositivo e não poderá ser recuperado.</p>
+            <div className="modal-actions">
+              <button className="secondary" onClick={() => setDraftPendingDeletion(null)}>Cancelar</button>
+              <button className="primary draft-delete-action" onClick={() => {
+                onDeleteDraft(draftPendingDeletion.id);
+                setDraftPendingDeletion(null);
+              }}>Excluir rascunho</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {draftPendingSend && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enviar rascunho">
+          <div className="confirm-modal">
+            <button className="modal-close" onClick={() => setDraftPendingSend(null)} aria-label="Fechar"><X size={20} /></button>
+            <span className="confirm-icon"><Send size={27} /></span>
+            <h2>Enviar pedido ao Sankhya?</h2>
+            <p>O rascunho será validado novamente antes do envio.</p>
+            <div className="confirm-summary"><span><small>Cliente</small><strong>{draftPendingSend.partner.NOMEPARC}</strong></span><span><small>Total</small><strong>{money(draftPendingSend.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0))}</strong></span></div>
+            {draftSendError && <div className="global-error">{draftSendError}</div>}
+            <div className="modal-actions"><button className="secondary" onClick={() => setDraftPendingSend(null)}>Cancelar</button><button className="primary" onClick={sendDraft} disabled={sendingDraft}>{sendingDraft ? <LoaderCircle className="spin" /> : <><Send size={18} /> Salvar e enviar</>}</button></div>
+          </div>
+        </div>
+      )}
+      <button className="mobile-fab" onClick={() => onNew(selectedSellerId, sellers.find((seller) => Number(seller.CODVEND) === selectedSellerId)?.APELIDO)}><Plus size={23} /> Novo pedido</button>
     </div>
   );
 }
@@ -2513,16 +2917,51 @@ function Metric({ icon, label, value, blue }: { icon: React.ReactNode; label: st
 function ClientsScreen({
   clients,
   loading,
+  online,
+  canAnalyzeSellers,
+  currentSellerId,
+  currentSellerName,
 }: {
   clients: Client[];
   loading: boolean;
+  online: boolean;
+  canAnalyzeSellers: boolean;
+  currentSellerId: number;
+  currentSellerName: string;
 }) {
   const [query, setQuery] = useState("");
+  const [selectedSellerId, setSelectedSellerId] = useState(currentSellerId);
+  const [sellers, setSellers] = useState<DashboardSeller[]>([]);
+  const [portfolio, setPortfolio] = useState<Client[]>(clients);
+  const [loadingSelectedPortfolio, setLoadingSelectedPortfolio] = useState(false);
+  useEffect(() => setSelectedSellerId(currentSellerId), [currentSellerId]);
+  useEffect(() => {
+    if (!canAnalyzeSellers || !online) return;
+    api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers", { cache: "no-store" })
+      .then((result) => setSellers(result.rows.map((item) => ({ CODVEND: Number(item.CODVEND), APELIDO: String(item.APELIDO || `Vendedor ${item.CODVEND}`) }))))
+      .catch(() => setSellers([]));
+  }, [canAnalyzeSellers, online]);
+  useEffect(() => {
+    if (selectedSellerId === currentSellerId) {
+      setPortfolio(clients);
+      return;
+    }
+    if (!online) return;
+    let cancelled = false;
+    setLoadingSelectedPortfolio(true);
+    api<{ rows: Client[] }>(`/api/sankhya/data?kind=portfolio&seller=${selectedSellerId}`, { cache: "no-store" })
+      .then((result) => { if (!cancelled) setPortfolio(result.rows); })
+      .catch(() => { if (!cancelled) setPortfolio([]); })
+      .finally(() => { if (!cancelled) setLoadingSelectedPortfolio(false); });
+    return () => { cancelled = true; };
+  }, [selectedSellerId, currentSellerId, clients, online]);
+  const selectedSellerName = sellers.find((seller) => seller.CODVEND === selectedSellerId)?.APELIDO || currentSellerName;
   const normalized = query.trim().toLowerCase();
-  const filtered = clients.filter((client) =>
+  const filtered = portfolio.filter((client) =>
     `${client.NOMEPARC} ${client.CODPARC} ${client.CGCCPF ?? ""}`.toLowerCase().includes(normalized),
   );
-  const configured = clients.filter((client) => client.CODTAB != null).length;
+  const configured = portfolio.filter((client) => client.CODTAB != null).length;
+  const isLoading = loading || loadingSelectedPortfolio;
 
   return (
     <div className="page clients-page">
@@ -2535,23 +2974,33 @@ function ClientsScreen({
         <div><span className="eyebrow">Carteira comercial</span><h1>Clientes</h1><p>Todos os clientes ativos vinculados ao seu cadastro de vendedor.</p></div>
       </header>
 
+      {canAnalyzeSellers && sellers.length > 0 && (
+        <section className="clients-seller-switch" aria-label="Selecionar vendedor para carteira">
+          <UsersRound size={20} />
+          <label><span>Consultar carteira do vendedor</span><select value={selectedSellerId} onChange={(event) => setSelectedSellerId(Number(event.target.value))}>
+            {sellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
+          </select></label>
+          <small>Clientes e tabelas de preço respeitam o vendedor selecionado.</small>
+        </section>
+      )}
+
       <label className="search-box clients-search">
         <Search size={21} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente por nome, código ou CPF/CNPJ" />
       </label>
 
       <section className="metrics client-metrics">
-        <Metric icon={<UsersRound />} label="Clientes na carteira" value={String(clients.length)} />
+        <Metric icon={<UsersRound />} label="Clientes na carteira" value={String(portfolio.length)} />
         <Metric icon={<CircleDollarSign />} label="Com tabela de preço" value={String(configured)} />
-        <Metric blue icon={<ClipboardList />} label="Sem tabela definida" value={String(clients.length - configured)} />
+        <Metric blue icon={<ClipboardList />} label="Sem tabela definida" value={String(portfolio.length - configured)} />
       </section>
 
       <section>
         <div className="section-heading">
-          <div><span className="eyebrow">Vendedor logado</span><h2>Minha carteira</h2><p>{filtered.length} {filtered.length === 1 ? "cliente encontrado" : "clientes encontrados"}</p></div>
+          <div><span className="eyebrow">{selectedSellerId === currentSellerId ? "Vendedor logado" : "Vendedor selecionado"}</span><h2>{selectedSellerId === currentSellerId ? "Minha carteira" : `Carteira de ${selectedSellerName}`}</h2><p>{filtered.length} {filtered.length === 1 ? "cliente encontrado" : "clientes encontrados"}</p></div>
         </div>
         <div className="client-grid">
-          {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando toda a carteira...</div> : filtered.map((client) => (
+          {isLoading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando toda a carteira...</div> : filtered.map((client) => (
             <article className="client-card" key={client.CODPARC}>
               <span className="client-avatar"><Building2 size={20} /></span>
               <div className="client-main">
@@ -2570,7 +3019,7 @@ function ClientsScreen({
               </div>
             </article>
           ))}
-          {!loading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
+          {!isLoading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
         </div>
       </section>
     </div>
@@ -2981,11 +3430,13 @@ function MoreScreen({
 function ClientPickerModal({
   clients,
   loading,
+  sellerName,
   onClose,
   onSelect,
 }: {
   clients: Client[];
   loading: boolean;
+  sellerName: string;
   onClose: () => void;
   onSelect: (client: Partner) => void;
 }) {
@@ -2998,7 +3449,7 @@ function ClientPickerModal({
     <div className="modal-backdrop client-picker-backdrop" role="dialog" aria-modal="true" aria-label="Selecionar cliente">
       <section className="client-picker-modal">
         <header>
-          <div><span className="eyebrow">Novo pedido</span><h2>Selecione o cliente</h2><p>Escolha um cliente da sua carteira para iniciar o pedido.</p></div>
+          <div><span className="eyebrow">Novo pedido — {sellerName || "Vendedor selecionado"}</span><h2>Selecione o cliente</h2><p>Escolha um cliente da carteira selecionada para iniciar o pedido.</p></div>
           <button className="modal-close" onClick={onClose} aria-label="Fechar"><X size={20} /></button>
         </header>
         <label className="search-box wide"><Search size={21} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por nome, código ou CPF/CNPJ" /></label>
@@ -3020,27 +3471,39 @@ function ClientPickerModal({
 function NewOrderV2({
   partner,
   draft,
+  actingSellerId,
+  ownSellerId,
   offlineData,
   online,
   onSaveDraft,
   onBack,
+  onSaved,
   onSent,
 }: {
   partner: Partner;
   draft: OrderDraft | null;
+  actingSellerId: number;
+  ownSellerId: number;
   offlineData: OfflineSnapshot | null;
   online: boolean;
   onSaveDraft: (draft: OrderDraft) => void;
   onBack: () => void;
+  onSaved: () => void;
   onSent: (id: string | undefined, draftId: string) => void;
 }) {
   const [draftId] = useState(() => draft?.id ?? `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const [phase, setPhase] = useState<OrderPhase>(draft?.phase ?? "header");
   const [tables, setTables] = useState<PriceTable[]>([]);
+  const [companies, setCompanies] = useState<OrderCompany[]>([]);
+  const [companyCode, setCompanyCode] = useState(Number(draft?.companyCode || 0));
+  const [operation, setOperation] = useState(Number(draft?.operation || 5));
+  const [operations, setOperations] = useState<OrderOperation[]>([]);
   const [negotiations, setNegotiations] = useState<Negotiation[]>([]);
   const [groups, setGroups] = useState<ProductGroup[]>([]);
   const [brands, setBrands] = useState<ProductBrand[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [productPage, setProductPage] = useState(1);
+  const [hasMoreProducts, setHasMoreProducts] = useState(false);
   const [priceCode, setPriceCode] = useState(Number(draft?.priceCode || 0));
   const [negotiation, setNegotiation] = useState(Number(draft?.negotiation || 0));
   const [observation, setObservation] = useState(draft?.observation ?? "");
@@ -3054,14 +3517,31 @@ function NewOrderV2({
   const [showGroupFilter, setShowGroupFilter] = useState(false);
   const [showBrandFilter, setShowBrandFilter] = useState(false);
   const [search, setSearch] = useState("");
+  const [productHighlight, setProductHighlight] = useState<"" | "promotion" | "lastPurchase" | "bestSellers">("");
   const [loading, setLoading] = useState(true);
   const [loadingProducts, setLoadingProducts] = useState(false);
+  const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
+  const [productImagePreview, setProductImagePreview] = useState<Product | null>(null);
+  const [productDetails, setProductDetails] = useState<Product | null>(null);
+  const [productLots, setProductLots] = useState<ProductLot[]>([]);
+  const [loadingProductLots, setLoadingProductLots] = useState(false);
+  const [productLotsError, setProductLotsError] = useState("");
+  const productLoadMoreRef = useRef<HTMLDivElement>(null);
 
   const selectedTable = tables.find((table) => Number(table.CODTAB) === priceCode);
+  const selectedCompany = companies.find((company) => Number(company.CODEMP) === companyCode);
   const selectedNegotiation = negotiations.find((item) => Number(item.CODTIPVENDA) === negotiation);
+  const selectedOperation = operations.find((item) => Number(item.CODTIPOPER) === operation);
+  const availableOperations = operations.length ? operations : [
+    { CODTIPOPER: 5, DESCROPER: "TOP 5" },
+    { CODTIPOPER: 6, DESCROPER: "TOP 6" },
+  ];
+  const availableNegotiations = operation === 6
+    ? negotiations.filter((item) => Number(item.CODTIPVENDA) === 53)
+    : negotiations;
   const total = useMemo(() => cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0), [cart]);
   const totalUnits = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -3149,18 +3629,29 @@ function NewOrderV2({
   }, []);
 
   const applyOfflineOptions = () => {
+    if (actingSellerId !== ownSellerId) return false;
     const cachedPartner = offlineData?.clients.find((item) => Number(item.CODPARC) === Number(partner.CODPARC));
     if (!offlineData || !cachedPartner) return false;
     const partnerTable = Number(cachedPartner.CODTAB || 0);
     const cachedTables = offlineData.tables
       .filter((table) => Number(table.CODTAB) === partnerTable) as PriceTable[];
+    const cachedCompany = Number(cachedPartner.CODEMP || 0);
+    if (cachedCompany) {
+      setCompanies([{
+        CODEMP: cachedCompany,
+        NOMEFANTASIA: `Empresa ${cachedCompany}`,
+        GRUPOICMS: cachedPartner.GRUPOICMS,
+        CODTAB: cachedPartner.CODTAB,
+      }]);
+      if (!companyCode) setCompanyCode(cachedCompany);
+    }
     const cachedNegotiations = offlineData.negotiations as Negotiation[];
     setTables(cachedTables);
     setNegotiations(cachedNegotiations);
     if (!priceCode) setPriceCode(Number(cachedTables[0]?.CODTAB || 0));
     if (!negotiation) {
       const preferred = cachedNegotiations.find(
-        (item) => Number(item.CODTIPVENDA) === Number(cachedPartner.CODTIPVENDA),
+        (item) => Number(item.CODTIPVENDA) === (operation === 6 ? 53 : 23),
       );
       setNegotiation(Number(preferred?.CODTIPVENDA ?? cachedNegotiations[0]?.CODTIPVENDA ?? 0));
     }
@@ -3224,7 +3715,7 @@ function NewOrderV2({
   const offlineProducts = () => {
     const term = normalizeProductSearch(search);
     const tokens = term.split(/\s+/).filter(Boolean);
-    return (offlineData?.products ?? [])
+    const filtered = (offlineData?.products ?? [])
       .filter((item) => {
         if (Number(item.CODTAB) !== priceCode) return false;
         if (term) {
@@ -3249,13 +3740,30 @@ function NewOrderV2({
         return relevance(left, leftCode) - relevance(right, rightCode)
           || String(left.DESCRPROD).localeCompare(String(right.DESCRPROD), "pt-BR");
       }) as Product[];
+    const consolidated = new Map<number, Product>();
+    filtered.forEach((product) => {
+      const current = consolidated.get(Number(product.CODPROD));
+      const available = Number(product.DISPONIVEL || 0);
+      if (!current) {
+        consolidated.set(Number(product.CODPROD), { ...product, LOT_DISPONIVEL: available });
+        return;
+      }
+      const total = Number(current.DISPONIVEL || 0) + available;
+      consolidated.set(Number(product.CODPROD), available > Number(current.LOT_DISPONIVEL || 0)
+        ? { ...product, DISPONIVEL: total, LOT_DISPONIVEL: available }
+        : { ...current, DISPONIVEL: total });
+    });
+    return [...consolidated.values()];
   };
 
   const currentDraft = (): OrderDraft => ({
     id: draftId,
     updatedAt: Date.now(),
+    sellerId: actingSellerId,
     phase,
     partner,
+    companyCode,
+    operation,
     priceCode,
     priceName: selectedTable?.NOMETAB ?? draft?.priceName ?? "",
     negotiation,
@@ -3272,18 +3780,21 @@ function NewOrderV2({
       setLoading(false);
       return;
     }
-    api<{ partner: ApiRow; tables: PriceTable[]; negotiations: Negotiation[] }>(
-      `/api/sankhya/data?kind=orderOptions&partner=${partner.CODPARC}`,
+    api<{ partner: ApiRow; companies: OrderCompany[]; company: number; tables: PriceTable[]; negotiations: Negotiation[]; operations: OrderOperation[] }>(
+      `/api/sankhya/data?kind=orderOptions&partner=${partner.CODPARC}&seller=${actingSellerId}&company=${companyCode}`,
     )
       .then((result) => {
+        setCompanies(result.companies);
+        setOperations(result.operations);
+        if (companyCode !== Number(result.company)) setCompanyCode(Number(result.company));
         setTables(result.tables);
         setNegotiations(result.negotiations);
         if (!priceCode) {
           const preferred = result.tables.find((table) => Number(table.CODTAB) === Number(result.partner.CODTAB));
           setPriceCode(Number(preferred?.CODTAB ?? result.tables[0]?.CODTAB ?? 0));
         }
-        if (!negotiation) {
-          const preferred = result.negotiations.find((item) => Number(item.CODTIPVENDA) === Number(result.partner.CODTIPVENDA));
+        if (!negotiation || operation === 6) {
+          const preferred = result.negotiations.find((item) => Number(item.CODTIPVENDA) === (operation === 6 ? 53 : 23));
           setNegotiation(Number(preferred?.CODTIPVENDA ?? result.negotiations[0]?.CODTIPVENDA ?? 0));
         }
       })
@@ -3291,7 +3802,7 @@ function NewOrderV2({
         if (!applyOfflineOptions()) setError(err.message);
       })
       .finally(() => setLoading(false));
-  }, [partner.CODPARC, online, offlineData]);
+  }, [partner.CODPARC, companyCode, operation, actingSellerId, online, offlineData]);
 
   useEffect(() => {
     if (phase !== "products" || !priceCode) return;
@@ -3303,7 +3814,7 @@ function NewOrderV2({
       return;
     }
     api<{ rows: ProductGroup[]; brands: ProductBrand[] }>(
-      `/api/sankhya/data?kind=productGroups&partner=${partner.CODPARC}&priceCode=${priceCode}&brand=${encodeURIComponent(brand)}`,
+      `/api/sankhya/data?kind=productGroups&partner=${partner.CODPARC}&priceCode=${priceCode}&company=${companyCode}&brand=${encodeURIComponent(brand)}&seller=${actingSellerId}`,
     )
       .then((result) => {
         setGroups(result.rows);
@@ -3315,18 +3826,24 @@ function NewOrderV2({
         if (cached.length) setGroups(cached);
         else setError(err.message);
       });
-  }, [phase, priceCode, brand, partner.CODPARC, online, offlineData]);
+  }, [phase, priceCode, companyCode, brand, partner.CODPARC, actingSellerId, online, offlineData]);
 
   useEffect(() => {
-    if (phase !== "products" || (!selectedGroups.length && !brand && !search.trim())) {
+    if (phase !== "products" || (!selectedGroups.length && !brand && !search.trim() && !productHighlight)) {
       setProducts([]);
+      setProductPage(1);
+      setHasMoreProducts(false);
       return;
     }
     const timer = window.setTimeout(() => {
       setLoadingProducts(true);
+      setHasMoreProducts(false);
       setError("");
       if (!online) {
-        setProducts(offlineProducts());
+        const cached = offlineProducts();
+        setProducts(cached.slice(0, PRODUCT_PAGE_SIZE));
+        setProductPage(1);
+        setHasMoreProducts(cached.length > PRODUCT_PAGE_SIZE);
         setLoadingProducts(false);
         return;
       }
@@ -3334,21 +3851,79 @@ function NewOrderV2({
         kind: "products",
         partner: String(partner.CODPARC),
         priceCode: String(priceCode),
+        company: String(companyCode),
         groups: selectedGroups.join(","),
         brand,
         q: search,
+        seller: String(actingSellerId),
+        highlight: productHighlight,
+        page: "1",
+        limit: String(PRODUCT_PAGE_SIZE),
       });
-      api<{ rows: Product[] }>(`/api/sankhya/data?${params}`)
-        .then((result) => setProducts(result.rows))
+      api<{ rows: Product[]; hasMore: boolean }>(`/api/sankhya/data?${params}`)
+        .then((result) => {
+          setProducts(result.rows);
+          setProductPage(1);
+          setHasMoreProducts(result.hasMore);
+        })
         .catch((err) => {
           const cached = offlineProducts();
-          if (cached.length) setProducts(cached);
+          if (cached.length) {
+            setProducts(cached.slice(0, PRODUCT_PAGE_SIZE));
+            setProductPage(1);
+            setHasMoreProducts(cached.length > PRODUCT_PAGE_SIZE);
+          }
           else setError(err.message);
         })
         .finally(() => setLoadingProducts(false));
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [phase, selectedGroups.join(","), brand, search, priceCode, partner.CODPARC, online, offlineData]);
+  }, [phase, selectedGroups.join(","), brand, search, productHighlight, priceCode, companyCode, partner.CODPARC, actingSellerId, online, offlineData]);
+
+  const loadMoreProducts = () => {
+    if (loadingProducts || loadingMoreProducts || !hasMoreProducts) return;
+    const nextPage = productPage + 1;
+    setLoadingMoreProducts(true);
+    if (!online) {
+      const cached = offlineProducts();
+      setProducts(cached.slice(0, nextPage * PRODUCT_PAGE_SIZE));
+      setProductPage(nextPage);
+      setHasMoreProducts(cached.length > nextPage * PRODUCT_PAGE_SIZE);
+      setLoadingMoreProducts(false);
+      return;
+    }
+    const params = new URLSearchParams({
+      kind: "products",
+      partner: String(partner.CODPARC),
+      priceCode: String(priceCode),
+      company: String(companyCode),
+      groups: selectedGroups.join(","),
+      brand,
+      q: search,
+      seller: String(actingSellerId),
+      highlight: productHighlight,
+      page: String(nextPage),
+      limit: String(PRODUCT_PAGE_SIZE),
+    });
+    api<{ rows: Product[]; hasMore: boolean }>(`/api/sankhya/data?${params}`)
+      .then((result) => {
+        setProducts((current) => [...current, ...result.rows]);
+        setProductPage(nextPage);
+        setHasMoreProducts(result.hasMore);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoadingMoreProducts(false));
+  };
+
+  useEffect(() => {
+    const target = productLoadMoreRef.current;
+    if (!target || !hasMoreProducts || loadingProducts || loadingMoreProducts) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) loadMoreProducts();
+    }, { rootMargin: "180px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMoreProducts, loadingProducts, loadingMoreProducts, productPage, products.length, phase, selectedGroups.join(","), brand, search, productHighlight, priceCode, companyCode, actingSellerId, online]);
 
   useEffect(() => {
     onSaveDraft(currentDraft());
@@ -3357,7 +3932,9 @@ function NewOrderV2({
   const setQuantity = (product: Product, change: number) => {
     setCart((current) => {
       const existing = current.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
-      const next = Math.max(0, Math.min(Number(product.DISPONIVEL), (existing?.quantity || 0) + change));
+      const grouping = Math.max(Number(product.AGRUPMIN || 1), 1);
+      const available = Math.floor(Number(product.LOT_DISPONIVEL ?? product.DISPONIVEL) / grouping) * grouping;
+      const next = Math.max(0, Math.min(available, (existing?.quantity || 0) + change * grouping));
       if (!next) return current.filter((item) => item !== existing);
       if (existing) return current.map((item) => item === existing ? { ...item, quantity: next } : item);
       return [...current, { ...product, quantity: next }];
@@ -3367,6 +3944,38 @@ function NewOrderV2({
   const quantityOf = (product: Product) =>
     cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL)?.quantity || 0;
 
+  const openProductDetails = (product: Product) => {
+    setProductDetails(product);
+    setProductLots([]);
+    setProductLotsError("");
+    if (!online) {
+      const lots = (offlineData?.products ?? [])
+        .filter((item) => Number(item.CODPROD) === Number(product.CODPROD) && Number(item.CODTAB) === priceCode)
+        .map((item) => ({
+          ...item,
+          ESTOQUE: Number(item.ESTOQUE ?? item.DISPONIVEL ?? 0),
+          RESERVADO: Number(item.RESERVADO || 0),
+          DISPONIVEL: Number(item.DISPONIVEL || 0),
+        })) as ProductLot[];
+      setProductLots(lots);
+      if (!lots.length) setProductLotsError("Detalhes dos lotes indisponíveis na carga offline.");
+      return;
+    }
+    setLoadingProductLots(true);
+    const params = new URLSearchParams({
+      kind: "productLots",
+      product: String(product.CODPROD),
+      partner: String(partner.CODPARC),
+      priceCode: String(priceCode),
+      company: String(companyCode),
+      seller: String(actingSellerId),
+    });
+    api<{ rows: ProductLot[] }>(`/api/sankhya/data?${params}`)
+      .then((result) => setProductLots(result.rows))
+      .catch((err) => setProductLotsError(err.message))
+      .finally(() => setLoadingProductLots(false));
+  };
+
   const clearProductFilters = () => {
     setBrand("");
     setPendingBrand("");
@@ -3375,6 +3984,7 @@ function NewOrderV2({
     setExpandedGroups([]);
     setGroupSearch("");
     setSearch("");
+    setProductHighlight("");
     setProducts([]);
     setError("");
   };
@@ -3459,6 +4069,11 @@ function NewOrderV2({
     onBack();
   };
 
+  const saveAndClose = () => {
+    onSaveDraft(currentDraft());
+    onSaved();
+  };
+
   const sendOrder = async () => {
     if (!online) {
       setError("O pedido foi mantido como rascunho. Conecte-se à internet para enviar ao Sankhya.");
@@ -3473,9 +4088,11 @@ function NewOrderV2({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           partner: partner.CODPARC,
-          operation: 5,
+          operation,
           negotiation,
           priceCode,
+          company: companyCode,
+          seller: actingSellerId,
           observation,
           items: cart.map((item) => ({
             product: Number(item.CODPROD),
@@ -3532,8 +4149,30 @@ function NewOrderV2({
             <div className="selected-client"><span className="client-avatar"><Building2 /></span><div><small>Cliente selecionado</small><strong>{partner.NOMEPARC}</strong><span>Cód. {partner.CODPARC}{partner.GRUPOICMS != null ? ` · Grupo ICMS ${partner.GRUPOICMS}` : ""}</span></div></div>
             {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando condições do Sankhya...</div> : (
               <div className="condition-grid">
-                <label>Empresa<div className="select-field"><Building2 size={19} /><span>1 — Norte Sul Sementes</span><LockKeyhole size={15} /></div></label>
-                <label>Tipo de operação<div className="select-field valid"><ClipboardList size={19} /><span>TOP 5 — Pedido de venda</span><CheckCircle2 size={16} /></div></label>
+                <label>Empresa
+                  <select className="native-select" value={companyCode} onChange={(event) => {
+                    setCompanyCode(Number(event.target.value));
+                    setPriceCode(0);
+                    setBrand("");
+                    setSelectedGroups([]);
+                    setProducts([]);
+                    setCart([]);
+                  }}>
+                    <option value={0}>Selecione a empresa</option>
+                    {companies.map((company) => <option key={company.CODEMP} value={company.CODEMP}>{company.CODEMP} — {company.NOMEFANTASIA}{company.GRUPOICMS != null ? ` · Grupo ICMS ${company.GRUPOICMS}` : ""}</option>)}
+                  </select>
+                  <small>Empresa vinculada ao Grupo ICMS/ISS do cliente.</small>
+                </label>
+                <label>Tipo de operação
+                  <select className="native-select" value={operation} onChange={(event) => {
+                    const nextOperation = Number(event.target.value);
+                    setOperation(nextOperation);
+                    setNegotiation(nextOperation === 6 ? 53 : 23);
+                  }}>
+                    {availableOperations.map((item) => <option key={item.CODTIPOPER} value={item.CODTIPOPER}>TOP {item.CODTIPOPER} — {item.DESCROPER}</option>)}
+                  </select>
+                  <small>{operation === 6 ? "A TOP 6 utiliza exclusivamente a negociação 53." : "A TOP 5 inicia com a negociação 23."}</small>
+                </label>
                 <label>Tabela de preço
                   <select className="native-select" value={priceCode} onChange={(event) => {
                     setPriceCode(Number(event.target.value));
@@ -3545,18 +4184,18 @@ function NewOrderV2({
                     <option value={0}>Selecione a tabela</option>
                     {tables.map((table) => <option key={table.CODTAB} value={table.CODTAB}>{table.CODTAB} — {table.NOMETAB}</option>)}
                   </select>
-                  <small>Tabela ativa cadastrada neste cliente para a empresa 1.</small>
+                  <small>Tabela ativa do Grupo ICMS/ISS para a empresa selecionada.</small>
                 </label>
                 <label>Tipo de negociação
                   <select className="native-select" value={negotiation} onChange={(event) => setNegotiation(Number(event.target.value))}>
                     <option value={0}>Selecione a negociação</option>
-                    {negotiations.map((item) => <option key={item.CODTIPVENDA} value={item.CODTIPVENDA}>{item.CODTIPVENDA} — {item.DESCRTIPVENDA}</option>)}
+                    {availableNegotiations.map((item) => <option key={item.CODTIPVENDA} value={item.CODTIPVENDA}>{item.CODTIPVENDA} — {item.DESCRTIPVENDA}</option>)}
                   </select>
                 </label>
                 <label className="observation-field">Observação<textarea value={observation} onChange={(event) => setObservation(event.target.value)} placeholder="Informações adicionais do pedido" /></label>
               </div>
             )}
-            <div className="rule-card"><ShieldCheck size={22} /><div><strong>Regras do Sankhya aplicadas</strong><p>A carteira, o Grupo de ICMS, a tabela, a negociação e a TOP 5 serão revalidados antes do envio.</p></div></div>
+            <div className="rule-card"><ShieldCheck size={22} /><div><strong>Regras do Sankhya aplicadas</strong><p>A carteira, o Grupo de ICMS, a tabela, a negociação e a TOP selecionada serão revalidados antes do envio.</p></div></div>
           </section>
         )}
 
@@ -3572,7 +4211,12 @@ function NewOrderV2({
                   Grupo{selectedGroups.length > 0 && <small>{selectedGroups.length}</small>}
                 </button>
               </div>
-              {(brand || selectedGroups.length > 0 || search.trim()) && (
+              <div className="product-filter-tabs product-highlight-tabs" role="group" aria-label="Destaques dos produtos">
+                <button className={productHighlight === "promotion" ? "active" : ""} onClick={() => setProductHighlight((current) => current === "promotion" ? "" : "promotion")}>Promoções</button><span />
+                <button className={productHighlight === "lastPurchase" ? "active" : ""} onClick={() => setProductHighlight((current) => current === "lastPurchase" ? "" : "lastPurchase")}>Última compra</button><span />
+                <button className={productHighlight === "bestSellers" ? "active" : ""} onClick={() => setProductHighlight((current) => current === "bestSellers" ? "" : "bestSellers")}>Mais vendidos</button>
+              </div>
+              {(brand || selectedGroups.length > 0 || search.trim() || productHighlight) && (
                 <div className="product-filter-actions">
                   <button onClick={clearProductFilters}><X size={14} /> Limpar filtros</button>
                 </div>
@@ -3584,19 +4228,20 @@ function NewOrderV2({
               </span>
             </div>
             <div className="product-list">
-              {!selectedGroups.length && !brand && !search.trim() ? <div className="empty-state product-filter-empty"><Filter size={22} /> Selecione uma marca, grupo ou pesquise um produto</div> :
+              {!selectedGroups.length && !brand && !search.trim() && !productHighlight ? <div className="empty-state product-filter-empty"><Filter size={22} /> Selecione uma marca, grupo ou pesquise um produto</div> :
                 loadingProducts ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando tabela, estoque e mobilidade...</div> :
                   products.map((product) => (
-                    <article key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}`} className={quantityOf(product) ? "selected" : ""}>
-                      <span className="product-icon"><Sprout size={22} /></span>
-                      <div className="product-info"><strong>{product.DESCRPROD}</strong><small>Cód. {product.CODPROD} · {product.CODVOL}{product.MARCA ? ` · ${product.MARCA}` : ""}</small><span><PackageCheck size={14} /> {Number(product.DISPONIVEL).toLocaleString("pt-BR")} disponíveis</span></div>
+                    <article key={product.CODPROD} className={quantityOf(product) ? "selected" : ""}>
+                      <button className="product-icon product-image-button" onClick={() => setProductImagePreview(product)} aria-label={`Ampliar imagem de ${product.DESCRPROD}`}><Sprout size={22} /><img src={productImageUrl(product)} alt="" onError={(event) => event.currentTarget.remove()} /></button>
+                      <div className="product-info"><button className="product-name-button" onClick={() => openProductDetails(product)} title={`Ver lotes de ${product.DESCRPROD}`}><strong>{product.DESCRPROD}</strong></button><small>Cód. {product.CODPROD} · {product.CODVOL}{product.MARCA ? ` · ${product.MARCA}` : ""}</small><span className="product-stock"><PackageCheck size={14} /><strong>{Number(product.DISPONIVEL).toLocaleString("pt-BR")}</strong> disponíveis</span></div>
                       <div className="product-price"><strong>{money(Number(product.VLRVENDA))}</strong><small>por {product.CODVOL}</small></div>
                       {quantityOf(product) ? (
                         <div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div>
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
                     </article>
                   ))}
-              {(selectedGroups.length > 0 || brand || search.trim()) && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado.</div>}
+              {hasMoreProducts && <div ref={productLoadMoreRef} className="product-load-more" aria-live="polite">{loadingMoreProducts && <><LoaderCircle className="spin" size={16} /> Carregando mais produtos...</>}</div>}
+              {(selectedGroups.length > 0 || brand || search.trim() || productHighlight) && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado.</div>}
             </div>
           </section>
         )}
@@ -3605,8 +4250,8 @@ function NewOrderV2({
           <section className="form-section review-section">
             <div className="section-heading"><div><span className="eyebrow">Revisão</span><h2>Revise seu pedido</h2><p>Confira as condições e os itens antes de validar o envio.</p></div></div>
             <div className="review-grid">
-              <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => goToPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Operação</dt><dd>TOP 5</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
-              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><span>{item.quantity}×</span><div><strong>{item.DESCRPROD}</strong><small>{money(Number(item.VLRVENDA))} / {item.CODVOL}</small></div><strong>{money(item.quantity * Number(item.VLRVENDA))}</strong></div>)}</article>
+              <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => goToPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Empresa</dt><dd>{selectedCompany ? `${selectedCompany.CODEMP} — ${selectedCompany.NOMEFANTASIA}` : companyCode}</dd></div><div><dt>Operação</dt><dd>TOP {operation} — {selectedOperation?.DESCROPER || ""}</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
+              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><div><strong>{item.DESCRPROD}</strong><small>{money(Number(item.VLRVENDA))} / {item.CODVOL}</small></div><strong>{money(item.quantity * Number(item.VLRVENDA))}</strong><div className="review-item-quantity"><button onClick={() => setQuantity(item, -1)} aria-label={`Diminuir ${item.DESCRPROD}`}><Minus size={14} /></button><strong>{item.quantity}×</strong><button onClick={() => setQuantity(item, 1)} aria-label={`Aumentar ${item.DESCRPROD}`}><Plus size={14} /></button></div></div>)}</article>
             </div>
             {observation && <div className="review-observation"><small>Observação</small><p>{observation}</p></div>}
             <div className="order-summary"><span><small>{totalUnits} {totalUnits === 1 ? "unidade" : "unidades"}</small><strong>Total do pedido</strong></span><strong>{money(total)}</strong></div>
@@ -3617,8 +4262,8 @@ function NewOrderV2({
         {error && <div className="global-error">{error}</div>}
       </div>
 
-      <footer className="new-footer">
-        <button className="secondary" onClick={phase === "header" ? closeOrder : () => window.history.back()}>Voltar</button>
+      <footer className={`new-footer ${phase === "review" ? "review-footer" : ""}`}>
+        <button className={`secondary ${phase === "review" ? "save-draft-button" : ""}`} onClick={phase === "review" ? saveAndClose : phase === "header" ? closeOrder : () => window.history.back()}>{phase === "review" ? <><FileText size={17} /> Salvar</> : "Voltar"}</button>
         <div className="footer-total">{phase !== "header" && <><small>{totalUnits} itens</small><strong>{money(total)}</strong></>}</div>
         <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length) || (phase === "review" && !online)} onClick={() => {
           if (phase === "header") goToPhase("products");
@@ -3627,7 +4272,7 @@ function NewOrderV2({
         }}>
           {phase === "review"
             ? online
-              ? <><ShieldCheck size={18} /> Validar e enviar</>
+              ? <><Send size={18} /> Salvar e enviar</>
               : <><CloudOff size={18} /> Aguardando internet</>
             : <>Continuar <ArrowRight size={18} /></>}
         </button>
@@ -3678,7 +4323,7 @@ function NewOrderV2({
             {brand && <div className="active-brand-filter"><Leaf size={16} /> Marca: <strong>{brand}</strong></div>}
             <span className="search-box group-search">
               <Search size={20} />
-              <input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Procurar grupo..." autoFocus />
+              <input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Procurar grupo..." />
             </span>
             <div className="group-tree">
               {rootGroups.length
@@ -3700,13 +4345,55 @@ function NewOrderV2({
         </div>
       )}
 
+      {productImagePreview && (
+        <div className="modal-backdrop product-image-backdrop" role="dialog" aria-modal="true" aria-label={`Imagem de ${productImagePreview.DESCRPROD}`} onClick={(event) => { if (event.target === event.currentTarget) setProductImagePreview(null); }}>
+          <section className="product-image-modal">
+            <button className="modal-close" onClick={() => setProductImagePreview(null)} aria-label="Fechar imagem"><X size={20} /></button>
+            <img src={productImageUrl(productImagePreview)} alt={productImagePreview.DESCRPROD} />
+            <strong>{productImagePreview.DESCRPROD}</strong>
+          </section>
+        </div>
+      )}
+
+      {productDetails && (
+        <div className="modal-backdrop product-details-backdrop" role="dialog" aria-modal="true" aria-label={`Lotes de ${productDetails.DESCRPROD}`} onClick={(event) => { if (event.target === event.currentTarget) setProductDetails(null); }}>
+          <section className="product-details-modal">
+            <button className="modal-close" onClick={() => setProductDetails(null)} aria-label="Fechar detalhes"><X size={20} /></button>
+            <div className="product-details-hero">
+              <button className="product-details-image" onClick={() => { setProductImagePreview(productDetails); setProductDetails(null); }} aria-label={`Ampliar imagem de ${productDetails.DESCRPROD}`}><Sprout size={28} /><img src={productImageUrl(productDetails)} alt="" onError={(event) => event.currentTarget.remove()} /></button>
+              <header><span className="eyebrow">Detalhes do produto</span><h2>{productDetails.DESCRPROD}</h2><p>Cód. {productDetails.CODPROD} · {productDetails.CODVOL}{productLots[0]?.REFERENCIA ? ` · Ref. ${productLots[0].REFERENCIA}` : ""}</p><strong className="product-details-price">{money(Number(productDetails.VLRVENDA))} <small>por {productDetails.CODVOL}</small></strong></header>
+            </div>
+            <div className="product-details-summary">
+              <div className="product-details-total"><PackageCheck size={20} /><span><small>Quantidade total disponível</small><strong>{Number(productDetails.DISPONIVEL).toLocaleString("pt-BR")} {productDetails.CODVOL}</strong></span></div>
+              <div className="product-details-order">
+                <span><small>Quantidade no pedido</small>{Number(productDetails.AGRUPMIN || 0) > 1 && <em>Múltiplos de {Number(productDetails.AGRUPMIN).toLocaleString("pt-BR")}</em>}</span>
+                {quantityOf(productDetails) ? (
+                  <div className="quantity"><button onClick={() => setQuantity(productDetails, -1)} aria-label={`Diminuir ${productDetails.DESCRPROD}`}><Minus size={17} /></button><strong>{quantityOf(productDetails)}</strong><button onClick={() => setQuantity(productDetails, 1)} aria-label={`Aumentar ${productDetails.DESCRPROD}`}><Plus size={17} /></button></div>
+                ) : <button className="add-button" onClick={() => setQuantity(productDetails, 1)}><Plus size={17} /> Adicionar</button>}
+              </div>
+            </div>
+            <div className="product-lot-heading"><strong>Lotes do produto</strong><small>{productLots.length} {productLots.length === 1 ? "lote" : "lotes"}</small></div>
+            {loadingProductLots ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando lotes...</div> : productLotsError ? <div className="global-error">{productLotsError}</div> : (
+              <div className="product-lot-list">
+                {productLots.map((lot, index) => <article key={`${lot.CODLOCAL}-${lot.CONTROLE}-${index}`}>
+                  <div className="product-lot-title"><span><small>Controle / lote</small><strong>{lot.CONTROLE || "Sem controle"}</strong></span><span><small>Local</small><strong>{lot.CODLOCAL}</strong></span></div>
+                  <div className="product-lot-dates"><span><CalendarDays size={15} /><span><small>Fabricação</small><strong>{lot.DTFABRICACAO ? sankhyaDate(lot.DTFABRICACAO) : "Não informada"}</strong></span></span><span><CalendarDays size={15} /><span><small>Validade</small><strong>{lot.DTVAL ? sankhyaDate(lot.DTVAL) : "Não informada"}</strong></span></span></div>
+                  <div className="product-lot-stock"><span><small>Disponível</small><strong>{Number(lot.DISPONIVEL).toLocaleString("pt-BR")}</strong></span><span><small>Reservada</small><strong>{Number(lot.RESERVADO).toLocaleString("pt-BR")}</strong></span></div>
+                </article>)}
+                {!productLots.length && <div className="empty-state">Nenhum lote disponível.</div>}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
       {showConfirm && (
         <div className="modal-backdrop">
           <div className="confirm-modal">
             <button className="modal-close" onClick={() => window.history.back()}><X size={20} /></button>
             <span className="confirm-icon"><Send size={27} /></span>
             <h2>Enviar pedido ao Sankhya?</h2>
-            <p>O cliente, a tabela, a negociação, os preços, o estoque e a TOP 5 serão validados novamente.</p>
+            <p>O cliente, a tabela, a negociação, os preços, o estoque e a TOP selecionada serão validados novamente.</p>
             <div className="confirm-summary"><span><small>Cliente</small><strong>{partner.NOMEPARC}</strong></span><span><small>Total</small><strong>{money(total)}</strong></span></div>
             <div className="modal-actions"><button className="secondary" onClick={() => window.history.back()}>Revisar</button><button className="primary" onClick={sendOrder} disabled={sending}>{sending ? <LoaderCircle className="spin" /> : <><Send size={18} /> Confirmar envio</>}</button></div>
           </div>

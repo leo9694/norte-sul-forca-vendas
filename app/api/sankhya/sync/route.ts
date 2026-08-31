@@ -15,15 +15,19 @@ export async function GET(request: Request) {
                        AND C.CODTIPOPER = 5
                        AND C.CODVEND = ${session.sellerId}), 53) CODTIPVENDA
           FROM TGFPAR P
-          LEFT JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+          LEFT JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
+            AND E.CODEMP = (
+              SELECT MIN(E2.CODEMP) FROM TGFPAEM E2
+               WHERE E2.CODPARC = P.CODPARC AND E2.CODTAB IS NOT NULL
+            )
          WHERE P.CLIENTE = 'S'
            AND P.ATIVO = 'S'
            AND P.CODVEND = ${session.sellerId}
          ORDER BY P.NOMEPARC
       `),
       executeQuery(session, `
-        SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.VLRNOTA, C.STATUSNOTA,
-               C.PENDENTE, C.CODPARC, P.NOMEPARC
+        SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI, C.VLRNOTA,
+               C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC
           FROM TGFCAB C
           JOIN TGFPAR P ON P.CODPARC = C.CODPARC
          WHERE C.CODTIPOPER = 5
@@ -49,6 +53,7 @@ export async function GET(request: Request) {
           FROM TGFTPV V
          WHERE V.ATIVO = 'S'
            AND V.CODTIPVENDA > 0
+           AND NVL(V.AD_MOBILIDADE, 'N') = 'S'
            AND V.DHALTER = (
              SELECT MAX(V2.DHALTER)
                FROM TGFTPV V2
@@ -88,7 +93,7 @@ export async function GET(request: Request) {
            WHERE T.DTVIGOR <= TRUNC(SYSDATE)
         ),
         ITENS AS (
-          SELECT PR.CODTAB, P.CODPROD, P.DESCRPROD, P.CODVOL,
+          SELECT PR.CODTAB, P.CODPROD, P.DESCRPROD, P.CODVOL, P.AGRUPMIN,
                  P.CODGRUPOPROD, G.DESCRGRUPOPROD,
                  NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
                  E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
@@ -110,7 +115,7 @@ export async function GET(request: Request) {
              AND G.ATIVO = 'S'
              AND G.ANALITICO = 'S'
         )
-        SELECT CODTAB, CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD,
+        SELECT CODTAB, CODPROD, DESCRPROD, CODVOL, AGRUPMIN, CODGRUPOPROD,
                DESCRGRUPOPROD, MARCA, CODLOCAL, CONTROLE,
                DISPONIVEL, NUTAB, VLRVENDA
           FROM ITENS

@@ -101,6 +101,11 @@ function omUrl(module: "mge" | "mgecom", serviceName: string, sessionId?: string
   return `${base}${module}/service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json${session}`;
 }
 
+export function sankhyaProductImageUrl(productCode: number) {
+  const base = env("SANKHYA_OM_BASE_URL").replace(/\/mge\/?$/, "/mge/");
+  return `${base}Produto@IMAGEM@CODPROD=${encodeURIComponent(String(productCode))}.dbimage`;
+}
+
 async function parseSankhyaJson<T>(response: Response) {
   const bytes = await response.arrayBuffer();
   let text = new TextDecoder("utf-8").decode(bytes);
@@ -246,17 +251,23 @@ export async function executeQuery(session: SankhyaSession, sql: string) {
 
 function privilegedSellerAnalysisGroup(value: unknown) {
   const group = String(value ?? "").trim().toLocaleLowerCase("pt-BR");
-  return group === "diretoria" || group === "gerente";
+  return group === "diretoria" || group === "gerente" || group === "supervisor";
+}
+
+function supervisorSellerType(value: unknown) {
+  const type = String(value ?? "").trim().toLocaleLowerCase("pt-BR");
+  return type === "s" || type === "supervisor";
 }
 
 export async function canAnalyzeOtherSellers(session: SankhyaSession) {
   const rows = await executeQuery(session, `
-    SELECT G.NOMEGRUPO
+    SELECT G.NOMEGRUPO, V.TIPVEND
       FROM TSIUSU U
-      JOIN TSIGRU G ON G.CODGRUPO = U.CODGRUPO
+      LEFT JOIN TSIGRU G ON G.CODGRUPO = U.CODGRUPO
+      LEFT JOIN TGFVEN V ON V.CODVEND = U.CODVEND
      WHERE U.CODUSU = ${session.userId}
   `);
-  return rows.some((row) => privilegedSellerAnalysisGroup(row.NOMEGRUPO));
+  return rows.some((row) => privilegedSellerAnalysisGroup(row.NOMEGRUPO) || supervisorSellerType(row.TIPVEND));
 }
 
 export async function createApplicationSession(username: string, password: string) {
@@ -265,7 +276,7 @@ export async function createApplicationSession(username: string, password: strin
     const technicalSession = await getTechnicalSession();
     const rows = await executeQuery(technicalSession as SankhyaSession, `
       SELECT U.CODUSU, U.NOMEUSU, U.NOMEUSUCPLT, U.CODVEND,
-             U.CODGRUPO, G.NOMEGRUPO, V.APELIDO, V.ATIVO
+             U.CODGRUPO, G.NOMEGRUPO, V.APELIDO, V.ATIVO, V.TIPVEND
         FROM TSIUSU U
         LEFT JOIN TSIGRU G ON G.CODGRUPO = U.CODGRUPO
         LEFT JOIN TGFVEN V ON V.CODVEND = U.CODVEND
@@ -282,7 +293,7 @@ export async function createApplicationSession(username: string, password: strin
     return {
       jsessionid: technicalSession.jsessionid,
       login: username.trim(),
-      canAnalyzeSellers: privilegedSellerAnalysisGroup(userData.NOMEGRUPO),
+      canAnalyzeSellers: privilegedSellerAnalysisGroup(userData.NOMEGRUPO) || supervisorSellerType(userData.TIPVEND),
       user: String(userData.NOMEUSUCPLT || userData.NOMEUSU || username),
       userId: authenticatedUser.userId,
       sellerId,

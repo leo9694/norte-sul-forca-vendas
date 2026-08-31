@@ -88,6 +88,8 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(storeSource, /indexedDB\.open/);
   assert.match(storeSource, /seller\.sellerId/);
   assert.match(syncSource, /clients,\s*orders,\s*tables,\s*negotiations,\s*products/);
+  assert.match(syncSource, /NVL\(V\.AD_MOBILIDADE, 'N'\) = 'S'/);
+  assert.match(syncSource, /TGFPAEM E ON E\.CODPARC = P\.CODPARC/);
   assert.match(syncSource, /CODGRUPAI/);
   assert.match(syncSource, /P\.MARCA/);
   assert.match(appSource, /function MoreScreen/);
@@ -153,6 +155,8 @@ test("shows a seller-scoped monthly performance dashboard", async () => {
   assert.match(appSource, /Últimos 30 dias/);
   assert.match(appSource, /type="date"/);
   assert.match(appSource, /norte-sul-vendas:dashboard:/);
+  assert.match(appSource, /if \(cached\) \{[\s\S]*setDashboard\(cached\)[\s\S]*setLoading\(false\)/);
+  assert.match(appSource, /canAnalyzeSellers/);
   assert.match(appSource, /kind=dashboardSellers/);
   assert.match(appSource, /Analisando vendedor/);
   assert.match(appSource, /seller: String\(selectedSellerId\)/);
@@ -161,9 +165,13 @@ test("shows a seller-scoped monthly performance dashboard", async () => {
   assert.match(dataSource, /dashboardSellerId = requestedSellerId/);
   assert.match(dataSource, /Vendedor inválido ou inativo/);
   assert.match(sankhyaSource, /JOIN TSIGRU G ON G\.CODGRUPO = U\.CODGRUPO/);
-  assert.match(sankhyaSource, /group === "diretoria" \|\| group === "gerente"/);
+  assert.match(sankhyaSource, /group === "diretoria" \|\| group === "gerente" \|\| group === "supervisor"/);
+  assert.match(sankhyaSource, /V\.TIPVEND/);
+  assert.match(sankhyaSource, /type === "s" \|\| type === "supervisor"/);
   assert.match(dataSource, /kind === "dashboard"/);
-  assert.match(dataSource, /C\.CODVEND = \$\{session\.sellerId\}/);
+  assert.match(dataSource, /DASHBOARD_CACHE_TTL_MS/);
+  assert.match(dataSource, /dashboardResponseCache/);
+  assert.match(dataSource, /C\.CODVEND = \$\{dashboardSellerId\}/);
   assert.match(dataSource, /TRUNC\(SYSDATE, 'MM'\)/);
   assert.match(dataSource, /safeDate\(url\.searchParams\.get\("dateFrom"\)\)/);
   assert.match(dataSource, /JOIN TGFITE/);
@@ -195,17 +203,33 @@ test("shows a seller-scoped monthly performance dashboard", async () => {
 });
 
 test("defaults the orders list to the current month with quick period filters", async () => {
-  const [appSource, dataSource] = await Promise.all([
+  const [appSource, dataSource, styleSource] = await Promise.all([
     readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "sankhya", "data", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "globals.css"), "utf8"),
   ]);
   const ordersScreen = appSource.slice(appSource.indexOf("function OrdersScreen"), appSource.indexOf("function Metric"));
+  const clientsScreen = appSource.slice(appSource.indexOf("function ClientsScreen"), appSource.indexOf("function MoreScreen"));
 
   assert.match(ordersScreen, /useState\(\(\) => currentMonthStart\(\)\)/);
   assert.match(ordersScreen, /Últimos 30 dias/);
   assert.match(ordersScreen, /Últimos 3 meses/);
   assert.match(ordersScreen, /period-filter-presets/);
+  assert.match(ordersScreen, /order-code/);
+assert.match(ordersScreen, /order-rich-meta/);
+  assert.match(ordersScreen, /Mais opções do rascunho/);
+  assert.match(ordersScreen, /Excluir rascunho/);
+  assert.match(ordersScreen, /draftPendingDeletion/);
+  assert.match(ordersScreen, /className="confirm-modal draft-delete-modal"/);
+  assert.match(ordersScreen, /order-rich-meta/);
+  assert.match(ordersScreen, /orderBillingStatus/);
   assert.match(dataSource, /kind === "orders"[\s\S]*?AND C\.DTNEG >= TRUNC\(SYSDATE, 'MM'\)/);
+  assert.match(dataSource, /C\.DTENTSAI[\s\S]*C\.CODTIPOPER/);
+  assert.match(styleSource, /@media \(max-width: 360px\)[\s\S]*\.order-card-rich/);
+  assert.match(styleSource, /\.order-rich-meta \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(clientsScreen, /Consultar carteira do vendedor/);
+  assert.match(clientsScreen, /kind=portfolio&seller=\$\{selectedSellerId\}/);
+  assert.match(styleSource, /\.clients-seller-switch/);
 });
 
 test("restricts and renders the consolidated company sales monitor", async () => {
@@ -291,6 +315,7 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   );
 
   assert.match(source, /function ClientPickerModal/);
+  assert.match(source, /Novo pedido — \{sellerName/);
   assert.match(activeFlow, /Selecione uma marca, grupo ou pesquise um produto/);
   assert.match(source, /normalizeProductSearch/);
   assert.match(activeFlow, /!selectedGroups\.length && !brand && !search\.trim/);
@@ -298,23 +323,54 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   assert.match(activeFlow, /Rascunho automático/);
   assert.match(activeFlow, /kind=productGroups/);
   assert.match(activeFlow, /Filtrar por grupo/);
+  assert.doesNotMatch(activeFlow, /placeholder="Procurar grupo\.\.\." autoFocus/);
   assert.match(activeFlow, /groups:\s*selectedGroups\.join/);
   assert.match(activeFlow, /Todas as marcas/);
   assert.match(activeFlow, /CODGRUPAI/);
   assert.match(activeFlow, /setExpandedGroups\(\[\]\)/);
   assert.match(activeFlow, /clearProductFilters/);
   assert.match(activeFlow, /Limpar filtros/);
+  assert.match(source, /PRODUCT_PAGE_SIZE\s*=\s*15/);
+  assert.match(activeFlow, /hasMoreProducts/);
+  assert.match(activeFlow, /IntersectionObserver/);
+  assert.match(activeFlow, /AGRUPMIN/);
+  assert.match(activeFlow, /change \* grouping/);
+  assert.match(activeFlow, /productImageUrl\(product\)/);
+  assert.match(activeFlow, /productImagePreview/);
+  assert.match(activeFlow, /openProductDetails/);
+  assert.match(activeFlow, /product-details-modal/);
+  assert.match(activeFlow, /product-details-image/);
+  assert.match(activeFlow, /Quantidade no pedido/);
+  assert.match(activeFlow, /Quantidade total disponível/);
+  assert.match(activeFlow, /Controle \/ lote/);
+  assert.match(activeFlow, /event\.target === event\.currentTarget/);
+  assert.match(activeFlow, /review-item-quantity/);
+  assert.match(activeFlow, /Salvar e enviar/);
+  assert.match(activeFlow, /saveAndClose/);
+  assert.match(activeFlow, /onSaved\(\)/);
+  assert.match(source, /onDraftSent/);
+  assert.match(source, /className="send-draft"/);
+  assert.match(source, /event\.target\.closest\("\.draft-actions"\)/);
+  assert.match(source, /shareDraftOrderReport/);
+  assert.match(source, /D A D O S   D O   C L I E N T E/);
+  assert.match(source, /navigator\.share/);
+  assert.match(source, /window\.open\("about:blank", "_blank"\)/);
+  assert.match(source, /className="draft-report"/);
   assert.match(activeFlow, /className="order-phase-nav"/);
-  assert.match(activeFlow, /Tabela ativa cadastrada neste cliente/);
+  assert.match(activeFlow, /Tabela ativa do Grupo ICMS\/ISS para a empresa selecionada/);
+  assert.match(activeFlow, /Empresa vinculada ao Grupo ICMS\/ISS do cliente/);
+  assert.match(activeFlow, /TOP \{item\.CODTIPOPER\} — \{item\.DESCROPER\}/);
+  assert.match(activeFlow, /operation === 6 \? 53 : 23/);
   assert.doesNotMatch(activeFlow, /className="stepper"/);
 });
 
 test("sends orders through an authenticated Sankhya service session", async () => {
-  const [sankhyaSource, orderSource, dataSource, logoutSource] = await Promise.all([
+  const [sankhyaSource, orderSource, dataSource, logoutSource, appSource] = await Promise.all([
     readFile(path.join(projectRoot, "app", "api", "_lib", "sankhya.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "sankhya", "orders", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "sankhya", "data", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "auth", "logout", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
   ]);
 
   assert.match(sankhyaSource, /mgeSession=/);
@@ -327,9 +383,25 @@ test("sends orders through an authenticated Sankhya service session", async () =
   assert.match(sankhyaSource, /return \{ \.\.\.session, jsessionid: technicalSession\.jsessionid \}/);
   assert.doesNotMatch(logoutSource, /MobileLoginSP\.logout/);
   assert.match(dataSource, /RELEVANCIA/);
+  assert.match(dataSource, /TOTAL_COUNT/);
+  assert.match(dataSource, /productLimit/);
+  assert.match(dataSource, /P\.AGRUPMIN/);
+  assert.match(dataSource, /kind === "productLots"/);
+  assert.match(dataSource, /E\.DTFABRICACAO/);
+  assert.match(dataSource, /E\.DTVAL/);
+  assert.match(dataSource, /SUM\(DISPONIVEL\) DISPONIVEL/);
+  assert.match(dataSource, /C\.CODEMP = \$\{company\}/);
+  assert.match(appSource, /api\/sankhya\/product-image/);
+  assert.doesNotMatch(dataSource, /EncodeBASE64/);
   assert.match(dataSource, /searchTokens\.map/);
   assert.match(dataSource, /!search && productGroups\.length/);
   assert.match(orderSource, /DHTIPOPER/);
   assert.match(orderSource, /DHTIPVENDA/);
+  assert.match(orderSource, /company\?: number/);
+  assert.match(orderSource, /CODEMP:\s*\{ \$: String\(company\) \}/);
+  assert.match(orderSource, /operation !== 5 && operation !== 6/);
+  assert.match(orderSource, /operation === 6 && negotiation !== 53/);
+  assert.match(orderSource, /P\.AGRUPMIN/);
+  assert.match(orderSource, /múltiplos de \$\{grouping\}/);
   assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);
 });
