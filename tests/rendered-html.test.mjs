@@ -87,13 +87,20 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
 
   assert.match(storeSource, /indexedDB\.open/);
   assert.match(storeSource, /seller\.sellerId/);
-  assert.match(syncSource, /clients,\s*orders,\s*tables,\s*negotiations,\s*products/);
+  assert.match(syncSource, /clients,\s*partnerCompanies,\s*orders,\s*tables,\s*negotiations,\s*operations,\s*products/);
   assert.match(syncSource, /NVL\(V\.AD_MOBILIDADE, 'N'\) = 'S'/);
   assert.match(syncSource, /TGFPAEM E ON E\.CODPARC = P\.CODPARC/);
+  assert.doesNotMatch(syncSource, /TGFPAEM E ON E\.CODPARC = P\.CODPARC AND E\.CODEMP = 1/);
+  assert.match(syncSource, /SELECT DISTINCT E\.CODEMP, N\.CODTAB, N\.NOMETAB/);
+  assert.match(syncSource, /SELECT PR\.CODEMP, PR\.CODTAB/);
+  assert.match(appSource, /offlineData\.partnerCompanies/);
+  assert.match(appSource, /offlineProductMatchesCompany/);
   assert.match(syncSource, /CODGRUPAI/);
   assert.match(syncSource, /P\.MARCA/);
   assert.match(appSource, /function MoreScreen/);
   assert.match(appSource, />Fazer carga</);
+  assert.match(appSource, /error instanceof ApiError && error\.status === 401/);
+  assert.match(appSource, /const returnToLogin = \(\) =>[\s\S]*?setAuthenticated\(false\)/);
   assert.match(appSource, /Aguardando internet/);
   assert.match(appSource, /beforeinstallprompt/);
   assert.match(appSource, /Instalar aplicativo/);

@@ -12,9 +12,11 @@ export type OfflineSnapshot = {
     sellerName: string;
   };
   clients: OfflineRow[];
+  partnerCompanies?: OfflineRow[];
   orders: OfflineRow[];
   tables: OfflineRow[];
   negotiations: OfflineRow[];
+  operations?: OfflineRow[];
   products: OfflineRow[];
   productGroups?: OfflineRow[];
 };

@@ -84,7 +84,7 @@ type ProductLot = ApiRow & {
   DISPONIVEL: number;
 };
 type CartItem = Product & { quantity: number };
-type PriceTable = { CODTAB: number; NOMETAB: string };
+type PriceTable = { CODEMP?: number; CODTAB: number; NOMETAB: string };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
 type OrderOperation = { CODTIPOPER: number; DESCROPER: string };
 type OrderCompany = { CODEMP: number; NOMEFANTASIA: string; GRUPOICMS?: number | null; CODTAB?: number | null };
@@ -1015,6 +1015,13 @@ const sankhyaDate = (value: unknown) => {
 
 const orderBillingStatus = (value: unknown) => String(value ?? "").trim().toUpperCase() === "S" ? "Pendente" : "Faturado";
 
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -1028,7 +1035,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
         : "O servidor não conseguiu concluir a solicitação. Reinicie o app e tente novamente.",
     );
   }
-  if (!response.ok) throw new Error(data.error || "Não foi possível concluir.");
+  if (!response.ok) throw new ApiError(data.error || "Não foi possível concluir.", response.status);
   return data as T;
 }
 
@@ -1245,6 +1252,20 @@ export function SalesApp() {
     void loadOrders();
   };
 
+  const returnToLogin = () => {
+    localStorage.setItem(OFFLINE_SESSION_KEY, "false");
+    setAuthenticated(false);
+    setUserId(0);
+    setSellerId(0);
+    setSellerName("");
+    setUnreadMessages(0);
+    setCanMonitorSales(false);
+    setScreen("home");
+    setClientPickerOpen(false);
+    setLogoutConfirmOpen(false);
+    replaceHistoryView("home");
+  };
+
   const makeLoad = async (showSuccess = true) => {
     if (!navigator.onLine) {
       setToast("Conecte-se à internet para fazer uma nova carga.");
@@ -1261,6 +1282,10 @@ export function SalesApp() {
       }
       return snapshot;
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        returnToLogin();
+        return null;
+      }
       setToast(error instanceof Error ? error.message : "Não foi possível fazer a carga.");
       return null;
     } finally {
@@ -3617,23 +3642,35 @@ function NewOrderV2({
     if (actingSellerId !== ownSellerId) return false;
     const cachedPartner = offlineData?.clients.find((item) => Number(item.CODPARC) === Number(partner.CODPARC));
     if (!offlineData || !cachedPartner) return false;
-    const partnerTable = Number(cachedPartner.CODTAB || 0);
-    const cachedTables = offlineData.tables
-      .filter((table) => Number(table.CODTAB) === partnerTable) as PriceTable[];
-    const cachedCompany = Number(cachedPartner.CODEMP || 0);
-    if (cachedCompany) {
-      setCompanies([{
-        CODEMP: cachedCompany,
-        NOMEFANTASIA: `Empresa ${cachedCompany}`,
-        GRUPOICMS: cachedPartner.GRUPOICMS,
-        CODTAB: cachedPartner.CODTAB,
-      }]);
-      if (!companyCode) setCompanyCode(cachedCompany);
-    }
+    const companyRows = (offlineData.partnerCompanies ?? [])
+      .filter((item) => Number(item.CODPARC) === Number(partner.CODPARC));
+    const cachedCompanies = (companyRows.length ? companyRows : [cachedPartner]).map((item) => ({
+      CODEMP: Number(item.CODEMP || 0),
+      NOMEFANTASIA: String(item.NOMEFANTASIA || `Empresa ${item.CODEMP}`),
+      GRUPOICMS: item.GRUPOICMS == null ? null : Number(item.GRUPOICMS),
+      CODTAB: item.CODTAB == null ? null : Number(item.CODTAB),
+    })).filter((item) => item.CODEMP > 0);
+    const cachedCompany = cachedCompanies.some((item) => item.CODEMP === companyCode)
+      ? companyCode
+      : Number(cachedCompanies[0]?.CODEMP || 0);
+    const companyData = cachedCompanies.find((item) => item.CODEMP === cachedCompany);
+    const partnerTable = Number(companyData?.CODTAB || 0);
+    const cachedTables = offlineData.tables.filter((table) =>
+      Number(table.CODTAB) === partnerTable
+      && (table.CODEMP == null ? cachedCompany === 1 : Number(table.CODEMP) === cachedCompany),
+    ) as PriceTable[];
+    setCompanies(cachedCompanies);
+    if (cachedCompany && companyCode !== cachedCompany) setCompanyCode(cachedCompany);
     const cachedNegotiations = offlineData.negotiations as Negotiation[];
     setTables(cachedTables);
     setNegotiations(cachedNegotiations);
-    if (!priceCode) setPriceCode(Number(cachedTables[0]?.CODTAB || 0));
+    setOperations((offlineData.operations ?? []) as OrderOperation[]);
+    if (!cachedTables.length) {
+      setError("A carga salva neste aparelho não contém a tabela desta empresa. Conecte-se e faça uma nova carga.");
+    }
+    if (!cachedTables.some((table) => Number(table.CODTAB) === priceCode)) {
+      setPriceCode(Number(cachedTables[0]?.CODTAB || 0));
+    }
     if (!negotiation) {
       const preferred = cachedNegotiations.find(
         (item) => Number(item.CODTIPVENDA) === (operation === 6 ? 53 : 23),
@@ -3643,12 +3680,16 @@ function NewOrderV2({
     return true;
   };
 
+  const offlineProductMatchesCompany = (item: ApiRow) =>
+    item.CODEMP == null ? companyCode === 1 : Number(item.CODEMP) === companyCode;
+
   const offlineGroups = () => {
     if (!offlineData) return [] as ProductGroup[];
     const eligible = new Set(
       offlineData.products
         .filter((item) =>
-          Number(item.CODTAB) === priceCode
+          offlineProductMatchesCompany(item)
+          && Number(item.CODTAB) === priceCode
           && (!brand || String(item.MARCA || "SEM MARCA").toUpperCase() === brand.toUpperCase()),
         )
         .map((item) => Number(item.CODGRUPOPROD)),
@@ -3692,7 +3733,7 @@ function NewOrderV2({
   const offlineBrands = () => {
     const values = new Set<string>();
     (offlineData?.products ?? [])
-      .filter((item) => Number(item.CODTAB) === priceCode)
+      .filter((item) => offlineProductMatchesCompany(item) && Number(item.CODTAB) === priceCode)
       .forEach((item) => values.add(String(item.MARCA || "SEM MARCA")));
     return [...values].sort((left, right) => left.localeCompare(right, "pt-BR")).map((MARCA) => ({ MARCA }));
   };
@@ -3702,7 +3743,7 @@ function NewOrderV2({
     const tokens = term.split(/\s+/).filter(Boolean);
     const filtered = (offlineData?.products ?? [])
       .filter((item) => {
-        if (Number(item.CODTAB) !== priceCode) return false;
+        if (!offlineProductMatchesCompany(item) || Number(item.CODTAB) !== priceCode) return false;
         if (term) {
           const searchable = normalizeProductSearch(
             `${item.DESCRPROD} ${item.CODPROD} ${item.REFERENCIA || ""} ${item.MARCA || ""}`,
@@ -3935,7 +3976,11 @@ function NewOrderV2({
     setProductLotsError("");
     if (!online) {
       const lots = (offlineData?.products ?? [])
-        .filter((item) => Number(item.CODPROD) === Number(product.CODPROD) && Number(item.CODTAB) === priceCode)
+        .filter((item) =>
+          offlineProductMatchesCompany(item)
+          && Number(item.CODPROD) === Number(product.CODPROD)
+          && Number(item.CODTAB) === priceCode,
+        )
         .map((item) => ({
           ...item,
           ESTOQUE: Number(item.ESTOQUE ?? item.DISPONIVEL ?? 0),

@@ -4,7 +4,7 @@ export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
 
-    const [clients, orders, tables, negotiations, products, productGroups] = await Promise.all([
+    const [clients, partnerCompanies, orders, tables, negotiations, operations, products, productGroups] = await Promise.all([
       executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
                P.TELEFONE, P.EMAIL, P.CODVEND,
@@ -26,6 +26,19 @@ export async function GET(request: Request) {
          ORDER BY P.NOMEPARC
       `),
       executeQuery(session, `
+        SELECT E.CODPARC, E.CODEMP,
+               NVL(EM.NOMEFANTASIA, TO_CHAR(E.CODEMP)) NOMEFANTASIA,
+               E.GRUPOICMS, E.CODTAB
+          FROM TGFPAR P
+          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
+          LEFT JOIN TSIEMP EM ON EM.CODEMP = E.CODEMP
+         WHERE P.CLIENTE = 'S'
+           AND P.ATIVO = 'S'
+           AND P.CODVEND = ${session.sellerId}
+           AND E.CODTAB IS NOT NULL
+         ORDER BY E.CODPARC, E.CODEMP
+      `),
+      executeQuery(session, `
         SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI, C.VLRNOTA,
                C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC
           FROM TGFCAB C
@@ -36,9 +49,9 @@ export async function GET(request: Request) {
          ORDER BY C.NUNOTA DESC
       `),
       executeQuery(session, `
-        SELECT DISTINCT N.CODTAB, N.NOMETAB
+        SELECT DISTINCT E.CODEMP, N.CODTAB, N.NOMETAB
           FROM TGFPAR P
-          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC AND E.CODEMP = 1
+          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
           JOIN TGFNTA N ON N.CODTAB = E.CODTAB
          WHERE P.CLIENTE = 'S'
            AND P.ATIVO = 'S'
@@ -46,7 +59,7 @@ export async function GET(request: Request) {
            AND E.CODTAB IS NOT NULL
            AND N.ATIVO = 'S'
            AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
-         ORDER BY N.NOMETAB
+         ORDER BY E.CODEMP, N.NOMETAB
       `),
       executeQuery(session, `
         SELECT V.CODTIPVENDA, V.DESCRTIPVENDA
@@ -62,10 +75,21 @@ export async function GET(request: Request) {
          ORDER BY V.DESCRTIPVENDA
       `),
       executeQuery(session, `
+        SELECT O.CODTIPOPER, O.DESCROPER
+          FROM TGFTOP O
+         WHERE O.CODTIPOPER IN (5, 6)
+           AND O.TIPMOV = 'P'
+           AND O.DHALTER = (
+             SELECT MAX(O2.DHALTER) FROM TGFTOP O2
+              WHERE O2.CODTIPOPER = O.CODTIPOPER
+           )
+         ORDER BY O.CODTIPOPER
+      `),
+      executeQuery(session, `
         WITH TABELAS AS (
-          SELECT DISTINCT E.CODTAB
+          SELECT DISTINCT E.CODEMP, E.CODTAB
             FROM TGFPAR CL
-            JOIN TGFPAEM E ON E.CODPARC = CL.CODPARC AND E.CODEMP = 1
+            JOIN TGFPAEM E ON E.CODPARC = CL.CODPARC
             JOIN TGFNTA N ON N.CODTAB = E.CODTAB
            WHERE CL.CLIENTE = 'S'
              AND CL.ATIVO = 'S'
@@ -75,16 +99,18 @@ export async function GET(request: Request) {
              AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
         ),
         ESTOQUE AS (
-          SELECT CODPROD, CODLOCAL, CONTROLE,
+          SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
+                 MAX(DTFABRICACAO) DTFABRICACAO, MAX(DTVAL) DTVAL,
+                 SUM(ESTOQUE) ESTOQUE, SUM(RESERVADO) RESERVADO,
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
-           WHERE CODEMP = 1
+           WHERE CODEMP IN (SELECT CODEMP FROM TABELAS)
              AND ATIVO = 'S'
-           GROUP BY CODPROD, CODLOCAL, CONTROLE
-          HAVING SUM(ESTOQUE - RESERVADO) > 0
+           GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
+           HAVING SUM(ESTOQUE - RESERVADO) > 0
         ),
         PRECOS AS (
-          SELECT T.CODTAB, X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
+          SELECT TB.CODEMP, T.CODTAB, X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
                  NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
                  X.VLRVENDA, T.NUTAB, T.DTVIGOR
             FROM TGFEXC X
@@ -93,13 +119,14 @@ export async function GET(request: Request) {
            WHERE T.DTVIGOR <= TRUNC(SYSDATE)
         ),
         ITENS AS (
-          SELECT PR.CODTAB, P.CODPROD, P.DESCRPROD, P.CODVOL, P.AGRUPMIN,
+          SELECT PR.CODEMP, PR.CODTAB, P.CODPROD, P.DESCRPROD, P.CODVOL, P.AGRUPMIN,
                  P.CODGRUPOPROD, G.DESCRGRUPOPROD,
                  NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
-                 E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
+                 E.CODLOCAL, E.CONTROLE, E.DTFABRICACAO, E.DTVAL,
+                 E.ESTOQUE, E.RESERVADO, E.DISPONIVEL,
                  PR.NUTAB, PR.VLRVENDA,
                  ROW_NUMBER() OVER (
-                   PARTITION BY PR.CODTAB, P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
+                   PARTITION BY PR.CODEMP, PR.CODTAB, P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
                    ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
                             CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
                             CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
@@ -107,7 +134,8 @@ export async function GET(request: Request) {
             FROM TGFPRO P
             JOIN TGFGRU G ON G.CODGRUPOPROD = P.CODGRUPOPROD
             JOIN ESTOQUE E ON E.CODPROD = P.CODPROD
-            JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
+            JOIN PRECOS PR ON PR.CODEMP = E.CODEMP
+                           AND PR.CODPROD = P.CODPROD
                            AND (PR.CODLOCAL = E.CODLOCAL OR PR.CODLOCAL = 0)
                            AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
            WHERE P.ATIVO = 'S'
@@ -115,13 +143,13 @@ export async function GET(request: Request) {
              AND G.ATIVO = 'S'
              AND G.ANALITICO = 'S'
         )
-        SELECT CODTAB, CODPROD, DESCRPROD, CODVOL, AGRUPMIN, CODGRUPOPROD,
+        SELECT CODEMP, CODTAB, CODPROD, DESCRPROD, CODVOL, AGRUPMIN, CODGRUPOPROD,
                DESCRGRUPOPROD, MARCA, CODLOCAL, CONTROLE,
-               DISPONIVEL, NUTAB, VLRVENDA
+               DTFABRICACAO, DTVAL, ESTOQUE, RESERVADO, DISPONIVEL, NUTAB, VLRVENDA
           FROM ITENS
          WHERE RN = 1
            AND VLRVENDA > 0
-         ORDER BY CODTAB, DESCRGRUPOPROD, DESCRPROD, DISPONIVEL DESC
+         ORDER BY CODEMP, CODTAB, DESCRGRUPOPROD, DESCRPROD, DISPONIVEL DESC
       `),
       executeQuery(session, `
         SELECT CODGRUPOPROD, DESCRGRUPOPROD, CODGRUPAI, GRAU, ANALITICO
@@ -141,9 +169,11 @@ export async function GET(request: Request) {
         sellerName: session.sellerName,
       },
       clients,
+      partnerCompanies,
       orders,
       tables,
       negotiations,
+      operations,
       products,
       productGroups,
     });
