@@ -2739,7 +2739,7 @@ function OrdersScreen({
     || sellers.find((seller) => Number(seller.CODVEND) === Number(draft.sellerId || currentSellerId))?.APELIDO
     || currentSellerName;
   const filtered = orders.filter((order) => {
-    const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
+    const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.CODPARC} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
     const state = order.STATUSNOTA === "L" ? "Enviados" : "Aguardando";
     return matchesSearch && filter !== "Rascunhos" && (filter === "Todos" || filter === state);
   });
@@ -2879,7 +2879,7 @@ function OrdersScreen({
       )}
 
       <div className="search-row">
-        <label className="search-box"><Search size={21} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pedido ou cliente" /></label>
+        <label className="search-box"><Search size={21} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pedido, cliente ou código" /></label>
         <button className={`filter-button ${dateFrom || dateTo ? "active" : ""}`} onClick={() => setShowPeriod((current) => !current)} aria-expanded={showPeriod}>
           <Filter size={20} /><span>{dateFrom || dateTo ? "Período ativo" : "Período"}</span>
         </button>
@@ -2961,7 +2961,7 @@ function OrdersScreen({
               <span className="order-icon">{index % 2 ? <Leaf /> : <Building2 />}</span>
               <div className="order-rich-content">
                 <div className="order-rich-head">
-                  <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)}</span></div></div>
+                  <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)} · {Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
                   <div className="order-rich-actions">
                     <div className="order-document-links">
                       <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir DANFE em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>

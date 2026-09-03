@@ -211,10 +211,11 @@ test("shows a seller-scoped monthly performance dashboard", async () => {
 });
 
 test("defaults the orders list to the current month with quick period filters", async () => {
-  const [appSource, dataSource, styleSource] = await Promise.all([
+  const [appSource, dataSource, styleSource, syncSource] = await Promise.all([
     readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "sankhya", "data", "route.ts"), "utf8"),
     readFile(path.join(projectRoot, "app", "globals.css"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "sankhya", "sync", "route.ts"), "utf8"),
   ]);
   const ordersScreen = appSource.slice(appSource.indexOf("function OrdersScreen"), appSource.indexOf("function Metric"));
   const clientsScreen = appSource.slice(appSource.indexOf("function ClientsScreen"), appSource.indexOf("function MoreScreen"));
@@ -237,8 +238,13 @@ assert.match(ordersScreen, /order-rich-meta/);
   assert.match(ordersScreen, /window\.open\("about:blank", "_blank"\)/);
   assert.match(ordersScreen, /URL\.createObjectURL\(new Blob\(\[bytes\], \{ type: "application\/pdf" \}\)\)/);
   assert.match(ordersScreen, /String\(order\.FATURADO\) !== "S"/);
+  assert.match(ordersScreen, /Number\(order\.CODTIPOPER\) === 6 \? "Bonificação" : "Pedido de venda"/);
+  assert.match(ordersScreen, /order\.NUNOTA[\s\S]*?order\.NUMNOTA[\s\S]*?order\.CODPARC[\s\S]*?order\.NOMEPARC/);
+  assert.match(ordersScreen, /Buscar pedido, cliente ou código/);
   assert.doesNotMatch(ordersScreen, /<small>Prazo<\/small>/);
   assert.match(dataSource, /kind === "orders"[\s\S]*?AND C\.DTNEG >= TRUNC\(SYSDATE, 'MM'\)/);
+  assert.match(dataSource, /kind === "orders"[\s\S]*?C\.CODTIPOPER IN \(5, 6\)/);
+  assert.match(syncSource, /C\.CODTIPOPER IN \(5, 6\)/);
   assert.match(dataSource, /C\.DTENTSAI[\s\S]*C\.CODTIPOPER/);
   assert.match(dataSource, /TGFVAR V[\s\S]*THEN 'S' ELSE 'N' END FATURADO/);
   assert.match(styleSource, /@media \(max-width: 360px\)[\s\S]*\.order-card-rich/);

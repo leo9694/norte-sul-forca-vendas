@@ -48,7 +48,7 @@ export async function GET(request: Request) {
                ) THEN 'S' ELSE 'N' END FATURADO
           FROM TGFCAB C
           JOIN TGFPAR P ON P.CODPARC = C.CODPARC
-         WHERE C.CODTIPOPER = 5
+         WHERE C.CODTIPOPER IN (5, 6)
            AND C.TIPMOV = 'P'
            AND C.CODVEND = ${session.sellerId}
          ORDER BY C.NUNOTA DESC
