@@ -105,11 +105,37 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(appSource, /Aguardando internet/);
   assert.match(appSource, /beforeinstallprompt/);
   assert.match(appSource, /Instalar aplicativo/);
+  assert.match(storeSource, /seller-drafts/);
+  assert.match(storeSource, /saveOfflineDrafts/);
+  assert.match(storeSource, /getOfflineDrafts/);
   assert.match(appSource, /Deseja sair do aplicativo/);
   assert.doesNotMatch(appSource, /button className="avatar"/);
   assert.match(appSource, /addEventListener\("popstate"/);
   assert.match(appSource, /history\.pushState/);
   assert.match(appSource, /phase:\s*nextPhase/);
+});
+
+test("backs up drafts on the VPS and offers authenticated recovery", async () => {
+  const [appSource, routeSource, storeSource, styleSource] = await Promise.all([
+    readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
+    readFile(path.join(projectRoot, "app", "api", "drafts", "route.ts"), "utf8"),
+    readFile(path.join(projectRoot, "db", "drafts.ts"), "utf8"),
+    readFile(path.join(projectRoot, "app", "globals.css"), "utf8"),
+  ]);
+
+  assert.match(routeSource, /requireSession/);
+  assert.match(routeSource, /canAnalyzeOtherSellers/);
+  assert.match(routeSource, /saveDraftBackup/);
+  assert.match(storeSource, /draft-backups\.sqlite/);
+  assert.match(storeSource, /CREATE TABLE IF NOT EXISTS draft_backups/);
+  assert.match(storeSource, /recovery_payload/);
+  assert.match(storeSource, /WHEN excluded\.item_count > 0 THEN excluded\.payload/);
+  assert.match(appSource, /api\("\/api\/drafts"/);
+  assert.match(appSource, /setInterval\(syncDraftBackups, 30_000\)/);
+  assert.match(appSource, /Restaurar rascunhos/);
+  assert.match(appSource, /Rascunho restaurado e disponível na aba Pedidos/);
+  assert.match(appSource, /saveOfflineDrafts/);
+  assert.match(styleSource, /\.draft-restore-modal/);
 });
 
 test("shows a seller-scoped monthly performance dashboard", async () => {

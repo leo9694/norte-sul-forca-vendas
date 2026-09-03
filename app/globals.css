@@ -924,16 +924,29 @@ textarea:focus { border-color: var(--green); }
 .seller-profile-card small { color: var(--green); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .11em; }
 .seller-profile-card h2 { margin: 4px 0 3px; font-size: 21px; }
 .seller-profile-card p { margin: 0; color: var(--muted); font-size: 11px; }
-.load-card, .install-card {
+.load-card, .install-card, .restore-card {
   margin-top: 18px; padding: 24px; display: grid; grid-template-columns: auto 1fr auto; gap: 17px; align-items: center;
   border: 1px solid #bcdccc; border-radius: 18px; background: white; box-shadow: var(--shadow);
 }
 .install-card.warning { border-color: #efd2a7; background: #fffaf2; }
 .load-card-icon { width: 54px; height: 54px; display: grid; place-items: center; border-radius: 15px; background: var(--green-soft); color: var(--green); }
-.load-card h2, .install-card h2 { margin: 5px 0 5px; font-size: 22px; }
-.load-card p, .install-card p { margin: 0 0 7px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.load-card h2, .install-card h2, .restore-card h2 { margin: 5px 0 5px; font-size: 22px; }
+.load-card p, .install-card p, .restore-card p { margin: 0 0 7px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .load-card-copy > small { color: var(--muted); font-size: 9px; }
 .load-button { min-width: 160px; }
+.draft-restore-backdrop { padding: 24px; }
+.draft-restore-modal { width: min(760px, 100%); max-height: min(720px, 92vh); overflow: hidden; padding: 25px; border-radius: 22px; background: white; box-shadow: 0 30px 80px #102a2099; }
+.draft-restore-modal > header { display: flex; justify-content: space-between; gap: 20px; padding-right: 48px; position: relative; }
+.draft-restore-modal > header h2 { margin: 5px 0; font-size: 24px; }
+.draft-restore-modal > header p { margin: 0; color: var(--muted); font-size: 11px; }
+.draft-restore-modal > header .modal-close { top: -7px; right: -7px; }
+.draft-backup-list { max-height: 540px; overflow: auto; margin-top: 20px; display: grid; gap: 10px; }
+.draft-backup-list article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 15px; }
+.draft-backup-copy { min-width: 0; display: grid; gap: 3px; }
+.draft-backup-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.draft-backup-copy small, .draft-backup-copy time { color: var(--muted); font-size: 9px; }
+.draft-backup-copy span { color: var(--green); font-size: 10px; font-weight: 700; }
+.draft-backup-list article > button { display: inline-flex; align-items: center; gap: 7px; }
 .offline-summary { margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .offline-summary article { min-height: 86px; display: flex; align-items: center; gap: 13px; padding: 17px; border: 1px solid var(--line); border-radius: 15px; background: white; }
 .offline-summary article > svg { width: 22px; color: var(--green); }
@@ -1221,8 +1234,12 @@ textarea:focus { border-color: var(--green); }
   .client-commercial { grid-column: 2; justify-items: start; display: flex; align-items: center; flex-wrap: wrap; }
   .seller-profile-card { grid-template-columns: auto 1fr; padding: 17px; }
   .seller-profile-card > .connection-badge { grid-column: 1 / -1; }
-  .load-card, .install-card { grid-template-columns: auto 1fr; padding: 18px 16px; }
+  .load-card, .install-card, .restore-card { grid-template-columns: auto 1fr; padding: 18px 16px; }
   .load-button { grid-column: 1 / -1; width: 100%; }
+  .draft-restore-backdrop { padding: 0; align-items: end; }
+  .draft-restore-modal { width: 100%; max-height: 90vh; padding: 22px 15px calc(18px + env(safe-area-inset-bottom, 0px)); border-radius: 22px 22px 0 0; }
+  .draft-backup-list article { grid-template-columns: auto minmax(0, 1fr); }
+  .draft-backup-list article > button { grid-column: 1 / -1; justify-content: center; width: 100%; }
   .client-picker-modal { padding: 20px 15px; max-height: 94vh; border-radius: 16px; }
   .group-filter-backdrop { padding: 0; align-items: end; }
   .group-filter-modal { width: 100%; max-height: 88vh; padding: 22px 15px 18px; border-radius: 22px 22px 0 0; }

@@ -48,3 +48,4 @@ next-env.d.ts
 /work/
 /data/chat-store.json
 /data/chat-store.json.*.tmp
+/data/draft-backups.sqlite*

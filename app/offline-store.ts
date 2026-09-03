@@ -23,7 +23,8 @@ export type OfflineSnapshot = {
 
 const DB_NAME = "norte-sul-forca-vendas";
 const STORE_NAME = "seller-snapshots";
-const DB_VERSION = 1;
+const DRAFT_STORE_NAME = "seller-drafts";
+const DB_VERSION = 2;
 
 function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -33,10 +34,44 @@ function openDatabase() {
       if (!database.objectStoreNames.contains(STORE_NAME)) {
         database.createObjectStore(STORE_NAME, { keyPath: "seller.sellerId" });
       }
+      if (!database.objectStoreNames.contains(DRAFT_STORE_NAME)) {
+        database.createObjectStore(DRAFT_STORE_NAME, { keyPath: "sellerId" });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Não foi possível abrir os dados offline."));
   });
+}
+
+export async function saveOfflineDrafts<T>(sellerId: number, drafts: T[]) {
+  const database = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(DRAFT_STORE_NAME, "readwrite");
+      transaction.objectStore(DRAFT_STORE_NAME).put({ sellerId, drafts, updatedAt: Date.now() });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("Não foi possível salvar os rascunhos offline."));
+      transaction.onabort = () => reject(transaction.error ?? new Error("O salvamento dos rascunhos foi cancelado."));
+    });
+  } finally {
+    database.close();
+  }
+}
+
+export async function getOfflineDrafts<T>(sellerId: number) {
+  const database = await openDatabase();
+  try {
+    return await new Promise<T[]>((resolve, reject) => {
+      const request = database.transaction(DRAFT_STORE_NAME, "readonly").objectStore(DRAFT_STORE_NAME).get(sellerId);
+      request.onsuccess = () => {
+        const drafts = (request.result as { drafts?: T[] } | undefined)?.drafts;
+        resolve(Array.isArray(drafts) ? drafts : []);
+      };
+      request.onerror = () => reject(request.error ?? new Error("Não foi possível ler os rascunhos offline."));
+    });
+  } finally {
+    database.close();
+  }
 }
 
 export async function saveOfflineSnapshot(snapshot: OfflineSnapshot) {

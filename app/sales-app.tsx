@@ -46,9 +46,11 @@ import {
 } from "lucide-react";
 import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
+  getOfflineDrafts,
   getLatestOfflineSnapshot,
   getOfflineSnapshot,
   OfflineSnapshot,
+  saveOfflineDrafts,
   saveOfflineSnapshot,
 } from "./offline-store";
 
@@ -124,6 +126,19 @@ type OrderDraft = {
   negotiationName: string;
   observation: string;
   cart: CartItem[];
+};
+
+type DraftBackup = {
+  draft_id: string;
+  seller_id: number;
+  seller_name: string;
+  partner_id: number;
+  partner_name: string;
+  item_count: number;
+  total_units: number;
+  updated_at: number;
+  backed_up_at: number;
+  draft: OrderDraft;
 };
 
 type ChatConversation = {
@@ -1135,6 +1150,7 @@ export function SalesApp() {
   const [orderSellerName, setOrderSellerName] = useState("");
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
+  const [draftsReady, setDraftsReady] = useState(false);
   const [toast, setToast] = useState("");
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [canMonitorSales, setCanMonitorSales] = useState(false);
@@ -1366,20 +1382,60 @@ export function SalesApp() {
   const draftKey = sellerId ? `norte-sul-vendas:drafts:${sellerId}` : "";
 
   useEffect(() => {
-    if (!draftKey) return;
-    try {
-      const stored = JSON.parse(localStorage.getItem(draftKey) || "[]") as OrderDraft[];
-      setDrafts(Array.isArray(stored) ? stored : []);
-    } catch {
-      setDrafts([]);
+    if (!draftKey || !sellerId) {
+      setDraftsReady(false);
+      return;
     }
-  }, [draftKey]);
+    let cancelled = false;
+    setDraftsReady(false);
+    let stored: OrderDraft[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem(draftKey) || "[]") as OrderDraft[];
+      stored = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      stored = [];
+    }
+    void getOfflineDrafts<OrderDraft>(sellerId)
+      .catch(() => [])
+      .then((indexedDrafts) => {
+        if (cancelled) return;
+        setDrafts((currentDrafts) => {
+          const merged = new Map<string, OrderDraft>();
+          [...stored, ...indexedDrafts, ...currentDrafts].forEach((item) => {
+            if (!item?.id) return;
+            const current = merged.get(item.id);
+            if (!current || Number(item.updatedAt || 0) >= Number(current.updatedAt || 0)) merged.set(item.id, item);
+          });
+          const next = [...merged.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+          try {
+            localStorage.setItem(draftKey, JSON.stringify(next));
+          } catch {
+            // O IndexedDB permanece como a cópia local principal quando o localStorage está indisponível.
+          }
+          void saveOfflineDrafts(sellerId, next).catch(() => null);
+          return next;
+        });
+        setDraftsReady(true);
+      });
+    return () => { cancelled = true; };
+  }, [draftKey, sellerId]);
+
+  const persistDraftsLocally = (next: OrderDraft[]) => {
+    try {
+      if (draftKey) localStorage.setItem(draftKey, JSON.stringify(next));
+    } catch {
+      // O salvamento continua no IndexedDB, que suporta rascunhos maiores.
+    }
+    if (sellerId) void saveOfflineDrafts(sellerId, next).catch(() => {
+      setToast("Não foi possível atualizar a cópia offline dos rascunhos.");
+    });
+  };
 
   const saveDraft = (draft: OrderDraft) => {
     setDrafts((current) => {
       const next = [draft, ...current.filter((item) => item.id !== draft.id)]
         .sort((a, b) => b.updatedAt - a.updatedAt);
-      if (draftKey) localStorage.setItem(draftKey, JSON.stringify(next));
+      persistDraftsLocally(next);
       return next;
     });
   };
@@ -1387,10 +1443,27 @@ export function SalesApp() {
   const removeDraft = (id: string) => {
     setDrafts((current) => {
       const next = current.filter((draft) => draft.id !== id);
-      if (draftKey) localStorage.setItem(draftKey, JSON.stringify(next));
+      persistDraftsLocally(next);
       return next;
     });
   };
+
+  useEffect(() => {
+    if (!authenticated || !online || !draftsReady || !drafts.length) return;
+    const syncDraftBackups = () => {
+      void Promise.all(drafts.map((draft) => api("/api/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft }),
+      }).catch(() => null)));
+    };
+    const initialSync = window.setTimeout(syncDraftBackups, 700);
+    const retrySync = window.setInterval(syncDraftBackups, 30_000);
+    return () => {
+      window.clearTimeout(initialSync);
+      window.clearInterval(retrySync);
+    };
+  }, [authenticated, online, draftsReady, drafts]);
 
   useEffect(() => {
     const notificationTarget = new URLSearchParams(window.location.search).get("open");
@@ -1614,6 +1687,11 @@ export function SalesApp() {
             secureContext={secureContext}
             onInstall={() => void installApplication()}
             onLoad={() => void makeLoad()}
+            onRestoreDraft={(draft) => {
+              saveDraft({ ...draft, updatedAt: Date.now() });
+              setToast("Rascunho restaurado e disponível na aba Pedidos.");
+              navigateTo("orders");
+            }}
             onLogout={requestLogout}
           />
         ) : (
@@ -3438,6 +3516,7 @@ function MoreScreen({
   secureContext,
   onInstall,
   onLoad,
+  onRestoreDraft,
   onLogout,
 }: {
   user: string;
@@ -3452,11 +3531,37 @@ function MoreScreen({
   secureContext: boolean;
   onInstall: () => void;
   onLoad: () => void;
+  onRestoreDraft: (draft: OrderDraft) => void;
   onLogout: () => void;
 }) {
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [backups, setBackups] = useState<DraftBackup[]>([]);
+  const [loadingBackups, setLoadingBackups] = useState(false);
+  const [restoringDraftId, setRestoringDraftId] = useState("");
+  const [backupError, setBackupError] = useState("");
   const lastLoad = snapshot?.syncedAt
     ? new Date(snapshot.syncedAt).toLocaleString("pt-BR")
     : "Nenhuma carga realizada";
+
+  const openDraftRestore = async () => {
+    if (!online) return;
+    setRestoreOpen(true);
+    setLoadingBackups(true);
+    setBackupError("");
+    try {
+      const result = await api<{ rows: DraftBackup[] }>("/api/drafts", { cache: "no-store" });
+      setBackups(result.rows);
+    } catch (error) {
+      setBackupError(error instanceof Error ? error.message : "Não foi possível consultar os backups.");
+    } finally {
+      setLoadingBackups(false);
+    }
+  };
+
+  const restoreDraft = (backup: DraftBackup) => {
+    setRestoringDraftId(backup.draft_id);
+    onRestoreDraft(backup.draft);
+  };
 
   return (
     <div className="page more-page">
@@ -3499,6 +3604,18 @@ function MoreScreen({
         </button>
       </section>
 
+      <section className="restore-card">
+        <div className="load-card-icon"><FileText size={25} /></div>
+        <div className="load-card-copy">
+          <span className="eyebrow">Backup na VPS</span>
+          <h2>Restaurar rascunhos</h2>
+          <p>Consulte as cópias sincronizadas e devolva um rascunho para a aba Pedidos.</p>
+        </div>
+        <button className="primary load-button" onClick={() => void openDraftRestore()} disabled={!online} title={online ? "Consultar rascunhos salvos" : "Conecte-se à internet para restaurar"}>
+          <RefreshCw size={19} /> Restaurar
+        </button>
+      </section>
+
       <section className={`install-card ${!secureContext ? "warning" : ""}`}>
         <div className="load-card-icon"><Download size={25} /></div>
         <div className="load-card-copy">
@@ -3536,6 +3653,35 @@ function MoreScreen({
       </div>
 
       <button className="secondary more-logout" onClick={onLogout}><LogOut size={18} /> Sair do aplicativo</button>
+
+      {restoreOpen && (
+        <div className="modal-backdrop draft-restore-backdrop" role="dialog" aria-modal="true" aria-label="Restaurar rascunhos" onClick={(event) => { if (event.target === event.currentTarget) setRestoreOpen(false); }}>
+          <section className="draft-restore-modal">
+            <header>
+              <div><span className="eyebrow">Backup na VPS</span><h2>Rascunhos disponíveis</h2><p>Escolha uma cópia para disponibilizá-la novamente na aba Pedidos.</p></div>
+              <button className="modal-close" onClick={() => setRestoreOpen(false)} aria-label="Fechar"><X size={20} /></button>
+            </header>
+            <div className="draft-backup-list">
+              {loadingBackups ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando backups...</div> : backups.map((backup) => (
+                <article key={backup.draft_id}>
+                  <span className="order-icon"><FileText size={19} /></span>
+                  <div className="draft-backup-copy">
+                    <strong>{backup.partner_name}</strong>
+                    <small>Vendedor: {backup.seller_name || backup.seller_id}</small>
+                    <span>{backup.item_count} {backup.item_count === 1 ? "produto" : "produtos"} · {Number(backup.total_units).toLocaleString("pt-BR")} unidades · {money(cartTotal(backup.draft.cart))}</span>
+                    <time>Salvo em {new Date(backup.backed_up_at).toLocaleString("pt-BR")}</time>
+                  </div>
+                  <button className="secondary" disabled={Boolean(restoringDraftId)} onClick={() => restoreDraft(backup)}>
+                    {restoringDraftId === backup.draft_id ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Restaurar
+                  </button>
+                </article>
+              ))}
+              {!loadingBackups && !backupError && !backups.length && <div className="empty-state">Nenhum rascunho foi sincronizado ainda.</div>}
+              {backupError && <div className="global-error">{backupError}</div>}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
