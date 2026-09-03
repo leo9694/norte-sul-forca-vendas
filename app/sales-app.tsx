@@ -3607,7 +3607,7 @@ function MoreScreen({
       <section className="restore-card">
         <div className="load-card-icon"><FileText size={25} /></div>
         <div className="load-card-copy">
-          <span className="eyebrow">Backup na VPS</span>
+          <span className="eyebrow">Backup na Nuvem</span>
           <h2>Restaurar rascunhos</h2>
           <p>Consulte as cópias sincronizadas e devolva um rascunho para a aba Pedidos.</p>
         </div>
@@ -3658,7 +3658,7 @@ function MoreScreen({
         <div className="modal-backdrop draft-restore-backdrop" role="dialog" aria-modal="true" aria-label="Restaurar rascunhos" onClick={(event) => { if (event.target === event.currentTarget) setRestoreOpen(false); }}>
           <section className="draft-restore-modal">
             <header>
-              <div><span className="eyebrow">Backup na VPS</span><h2>Rascunhos disponíveis</h2><p>Escolha uma cópia para disponibilizá-la novamente na aba Pedidos.</p></div>
+              <div><span className="eyebrow">Backup na Nuvem</span><h2>Rascunhos disponíveis</h2><p>Escolha uma cópia para disponibilizá-la novamente na aba Pedidos.</p></div>
               <button className="modal-close" onClick={() => setRestoreOpen(false)} aria-label="Fechar"><X size={20} /></button>
             </header>
             <div className="draft-backup-list">

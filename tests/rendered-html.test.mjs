@@ -115,7 +115,7 @@ test("keeps a seller-scoped offline load and manual refresh screen", async () =>
   assert.match(appSource, /phase:\s*nextPhase/);
 });
 
-test("backs up drafts on the VPS and offers authenticated recovery", async () => {
+test("backs up drafts in the cloud and offers authenticated recovery", async () => {
   const [appSource, routeSource, storeSource, styleSource] = await Promise.all([
     readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
     readFile(path.join(projectRoot, "app", "api", "drafts", "route.ts"), "utf8"),
@@ -133,6 +133,7 @@ test("backs up drafts on the VPS and offers authenticated recovery", async () =>
   assert.match(appSource, /api\("\/api\/drafts"/);
   assert.match(appSource, /setInterval\(syncDraftBackups, 30_000\)/);
   assert.match(appSource, /Restaurar rascunhos/);
+  assert.match(appSource, /Backup na Nuvem/);
   assert.match(appSource, /Rascunho restaurado e disponível na aba Pedidos/);
   assert.match(appSource, /saveOfflineDrafts/);
   assert.match(styleSource, /\.draft-restore-modal/);
