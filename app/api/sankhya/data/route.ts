@@ -225,7 +225,12 @@ export async function GET(request: Request) {
       const rows = await executeQuery(session, `
         SELECT * FROM (
           SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI, C.VLRNOTA,
-                 C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC
+                 C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC,
+                 CASE WHEN EXISTS (
+                   SELECT 1 FROM TGFVAR V
+                   JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
+                   WHERE V.NUNOTAORIG = C.NUNOTA
+                 ) THEN 'S' ELSE 'N' END FATURADO
            FROM TGFCAB C
             JOIN TGFPAR P ON P.CODPARC = C.CODPARC
            WHERE C.CODTIPOPER = 5 AND C.TIPMOV = 'P'
@@ -568,6 +573,21 @@ export async function GET(request: Request) {
       return Response.json({ rows });
     }
 
+    if (kind === "productReferences") {
+      const products = (url.searchParams.get("products") ?? "")
+        .split(",")
+        .map((value) => numeric(value))
+        .filter((value, index, values) => value > 0 && values.indexOf(value) === index)
+        .slice(0, 500);
+      if (!products.length) return Response.json({ rows: [] });
+      const rows = await executeQuery(session, `
+        SELECT P.CODPROD, P.REFERENCIA
+          FROM TGFPRO P
+         WHERE P.CODPROD IN (${products.join(",")})
+      `);
+      return Response.json({ rows });
+    }
+
     if (kind === "orderOptions") {
       const partner = numeric(url.searchParams.get("partner"));
       const requestedCompany = numeric(url.searchParams.get("company"));
@@ -840,7 +860,7 @@ export async function GET(request: Request) {
              AND T.DTVIGOR <= TRUNC(SYSDATE)
         )${bestSellersCte},
         ITENS AS (
-          SELECT P.CODPROD, P.DESCRPROD, P.CODVOL, P.CODGRUPOPROD, P.AGRUPMIN,
+          SELECT P.CODPROD, P.DESCRPROD, P.REFERENCIA, P.CODVOL, P.CODGRUPOPROD, P.AGRUPMIN,
                  NVL(TRIM(P.MARCA), 'SEM MARCA') MARCA,
                  E.CODLOCAL, E.CONTROLE, E.DTFABRICACAO, E.DTVAL, E.DISPONIVEL,
                  ${priceCode} CODTAB, PR.NUTAB, PR.VLRVENDA,
@@ -866,7 +886,7 @@ export async function GET(request: Request) {
              ${filter}
         ),
         PRODUTOS AS (
-          SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA,
+          SELECT CODPROD, DESCRPROD, REFERENCIA, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA,
                  SUM(DISPONIVEL) DISPONIVEL,
                  MAX(DISPONIVEL) LOT_DISPONIVEL,
                  MIN(CODLOCAL) KEEP (DENSE_RANK FIRST ORDER BY DISPONIVEL DESC, DTVAL NULLS LAST, CODLOCAL, CONTROLE) CODLOCAL,
@@ -889,9 +909,9 @@ export async function GET(request: Request) {
                   AND CL.CLIENTE = 'S'
                   AND CL.ATIVO = 'S'
              )
-           GROUP BY CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA
+           GROUP BY CODPROD, DESCRPROD, REFERENCIA, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA
         )
-        SELECT CODPROD, DESCRPROD, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA,
+        SELECT CODPROD, DESCRPROD, REFERENCIA, CODVOL, CODGRUPOPROD, AGRUPMIN, MARCA,
                CODLOCAL, CONTROLE, DISPONIVEL, LOT_DISPONIVEL, CODTAB, NUTAB, VLRVENDA, TOTAL_COUNT
           FROM (
             SELECT PRODUTOS.*, COUNT(*) OVER () TOTAL_COUNT,

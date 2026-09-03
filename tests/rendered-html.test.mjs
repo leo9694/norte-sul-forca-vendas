@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { normalizeOrderDocuments, publicDocumentError } from "../app/api/_lib/order-documents.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const clientRoot = path.join(projectRoot, "dist", "client");
@@ -231,9 +232,15 @@ assert.match(ordersScreen, /order-rich-meta/);
   assert.match(ordersScreen, /order-rich-meta/);
   assert.match(ordersScreen, /orderBillingStatus/);
   assert.match(ordersScreen, /Data da negociação/);
+  assert.match(ordersScreen, /Abrir DANFE<\/button>/);
+  assert.match(ordersScreen, /Abrir boleto<\/button>/);
+  assert.match(ordersScreen, /window\.open\("about:blank", "_blank"\)/);
+  assert.match(ordersScreen, /URL\.createObjectURL\(new Blob\(\[bytes\], \{ type: "application\/pdf" \}\)\)/);
+  assert.match(ordersScreen, /String\(order\.FATURADO\) !== "S"/);
   assert.doesNotMatch(ordersScreen, /<small>Prazo<\/small>/);
   assert.match(dataSource, /kind === "orders"[\s\S]*?AND C\.DTNEG >= TRUNC\(SYSDATE, 'MM'\)/);
   assert.match(dataSource, /C\.DTENTSAI[\s\S]*C\.CODTIPOPER/);
+  assert.match(dataSource, /TGFVAR V[\s\S]*THEN 'S' ELSE 'N' END FATURADO/);
   assert.match(styleSource, /@media \(max-width: 360px\)[\s\S]*\.order-card-rich/);
   assert.match(styleSource, /\.order-rich-meta \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.match(clientsScreen, /Consultar carteira do vendedor/);
@@ -354,14 +361,28 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   assert.match(activeFlow, /Controle \/ lote/);
   assert.match(activeFlow, /event\.target === event\.currentTarget/);
   assert.match(activeFlow, /review-item-quantity/);
+  assert.match(activeFlow, /− Desc\. \/ \+ Acrésc\./);
+  assert.match(activeFlow, /adjustmentPercent: itemAdjustment\(item\)/);
+  assert.match(activeFlow, /cartItemTotal\(item\)/);
   assert.match(activeFlow, /Salvar e enviar/);
   assert.match(activeFlow, /saveAndClose/);
   assert.match(activeFlow, /onSaved\(\)/);
   assert.match(source, /onDraftSent/);
   assert.match(source, /className="send-draft"/);
+  assert.match(source, /sellerNameForDraft/);
+  assert.match(source, /Rascunho automático · Vendedor:/);
+  assert.match(source, /sellerName: actingSellerName/);
+  assert.doesNotMatch(source, /draftSellerId === selectedSellerId/);
   assert.match(source, /event\.target\.closest\("\.draft-actions"\)/);
   assert.match(source, /shareDraftOrderReport/);
   assert.match(source, /D A D O S   D O   C L I E N T E/);
+  assert.match(source, /Pedido com Código de barras/);
+  assert.match(source, /pdf\.setProperties\(\{ title: reportTitle/);
+  assert.match(source, /\["Cód\.", "Descrição", "Código de barras", "Un\.", "Qtd", "Vlr Unit", "Impostos", "Valor Total"\]/);
+  assert.match(source, /item\.REFERENCIA \|\| "--"/);
+  assert.match(source, /kind=productReferences&products=/);
+  assert.match(source, /REFERENCIA: item\.REFERENCIA \|\| references\.get/);
+  assert.match(source, /reportDraft\(draft, true\)/);
   assert.match(source, /navigator\.share/);
   assert.match(source, /window\.open\("about:blank", "_blank"\)/);
   assert.match(source, /className="draft-report"/);
@@ -408,9 +429,45 @@ test("sends orders through an authenticated Sankhya service session", async () =
   assert.match(orderSource, /DHTIPVENDA/);
   assert.match(orderSource, /company\?: number/);
   assert.match(orderSource, /CODEMP:\s*\{ \$: String\(company\) \}/);
+  assert.match(orderSource, /seller !== session\.sellerId && !\(await canAnalyzeOtherSellers\(session\)\)/);
+  assert.match(orderSource, /CODVEND:\s*\{ \$: String\(seller\) \}/);
   assert.match(orderSource, /operation !== 5 && operation !== 6/);
   assert.match(orderSource, /operation === 6 && negotiation !== 53/);
   assert.match(orderSource, /P\.AGRUPMIN/);
   assert.match(orderSource, /múltiplos de \$\{grouping\}/);
+  assert.match(orderSource, /PERCDESC:\s*\{ \$: String\(-Number\(item\.adjustmentPercent \|\| 0\)\) \}/);
+  assert.match(orderSource, /desconto ou acréscimo percentual inválido/);
   assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);
+});
+
+test("normalizes an authorized NF-e with an available boleto", () => {
+  const result = normalizeOrderDocuments({
+    NUNOTA: 900, NUMNOTA: 123, SERIENOTA: 1, CODEMP: 6, CODPARC: 10,
+    NOMEPARC: "CLIENTE", VLRNOTA: 250, STATUSNOTA: "L", STATUSNFE: "A",
+    CHAVENFE: "1".repeat(44), POSSUIXML: "S",
+  }, [{ NUFIN: 80, VLRDESDOB: 250, DTVENC: "10/09/2026", CODCTABCOINT: 2, NOMEBCO: "BANCO" }]);
+
+  assert.equal(result.nfe.available, true);
+  assert.equal(result.nfe.xmlAvailable, true);
+  assert.equal(result.boletos[0].available, true);
+});
+
+test("keeps every installment linked to an invoice", () => {
+  const result = normalizeOrderDocuments({ NUNOTA: 900 }, [
+    { NUFIN: 1, VLRDESDOB: 100, CODCTABCOINT: 2 },
+    { NUFIN: 2, VLRDESDOB: 150, CODCTABCOINT: 2 },
+  ]);
+  assert.deepEqual(result.boletos.map((item) => item.nufin), [1, 2]);
+});
+
+test("handles an invoice without boleto", () => {
+  const result = normalizeOrderDocuments({ NUNOTA: 900 }, []);
+  assert.equal(result.billed, true);
+  assert.deepEqual(result.boletos, []);
+});
+
+test("hides technical Sankhya integration details from the browser", () => {
+  const message = publicDocumentError(new Error("token=secret; ORA-00942; JSESSIONID=private"));
+  assert.match(message, /temporariamente indisponível/);
+  assert.doesNotMatch(message, /secret|ORA-|JSESSIONID/);
 });

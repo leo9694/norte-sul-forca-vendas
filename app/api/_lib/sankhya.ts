@@ -101,6 +101,16 @@ function omUrl(module: "mge" | "mgecom", serviceName: string, sessionId?: string
   return `${base}${module}/service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json${session}`;
 }
 
+function omResourceUrl(module: "mge" | "mgecom", resourcePath: string, sessionId: string, params: Record<string, string | number> = {}) {
+  const configured = env("SANKHYA_OM_BASE_URL");
+  const base = configured.replace(/\/mge\/?$/, "/");
+  const query = new URLSearchParams({
+    ...Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)])),
+    mgeSession: sessionId,
+  });
+  return `${base}${module}/${resourcePath.replace(/^\/+/, "")}?${query}`;
+}
+
 export function sankhyaProductImageUrl(productCode: number) {
   const base = env("SANKHYA_OM_BASE_URL").replace(/\/mge\/?$/, "/mge/");
   return `${base}Produto@IMAGEM@CODPROD=${encodeURIComponent(String(productCode))}.dbimage`;
@@ -234,6 +244,41 @@ export async function callSankhya(
     const renewedSession = await getTechnicalSession(true);
     session.jsessionid = renewedSession.jsessionid;
     return callSankhyaOnce(session.jsessionid, module, serviceName, requestBody);
+  }
+}
+
+async function downloadSankhyaFileOnce(
+  session: SankhyaSession,
+  module: "mge" | "mgecom",
+  resourcePath: string,
+  params: Record<string, string | number>,
+) {
+  const response = await fetch(omResourceUrl(module, resourcePath, session.jsessionid, params), {
+    headers: { Cookie: `JSESSIONID=${session.jsessionid}` },
+  });
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) throw new Error("SANKHYA_AUTH_REQUIRED");
+    throw new Error("O Sankhya não disponibilizou o arquivo solicitado.");
+  }
+  return {
+    buffer: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+  };
+}
+
+export async function downloadSankhyaFile(
+  session: SankhyaSession,
+  module: "mge" | "mgecom",
+  resourcePath: string,
+  params: Record<string, string | number>,
+) {
+  try {
+    return await downloadSankhyaFileOnce(session, module, resourcePath, params);
+  } catch (error) {
+    if (!isSankhyaAuthenticationError(error)) throw error;
+    const renewedSession = await getTechnicalSession(true);
+    session.jsessionid = renewedSession.jsessionid;
+    return downloadSankhyaFileOnce(session, module, resourcePath, params);
   }
 }
 

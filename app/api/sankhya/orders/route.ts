@@ -4,6 +4,7 @@ type OrderItem = {
   product: number;
   quantity: number;
   unitPrice: number;
+  adjustmentPercent?: number;
   volume: string;
   location: number;
   control: string;
@@ -48,6 +49,12 @@ export async function POST(request: Request) {
     if (!items.length) throw new Error("Inclua ao menos um produto.");
     if (items.some((item) => !Number.isInteger(item.product) || item.quantity <= 0)) {
       throw new Error("Há itens com quantidade inválida.");
+    }
+    if (items.some((item) => {
+      const adjustment = Number(item.adjustmentPercent || 0);
+      return !Number.isFinite(adjustment) || adjustment <= -100 || adjustment > 999.99;
+    })) {
+      throw new Error("Há itens com desconto ou acréscimo percentual inválido.");
     }
     if (!Number.isInteger(seller) || seller <= 0) throw new Error("Vendedor inválido.");
     if (seller !== session.sellerId && !(await canAnalyzeOtherSellers(session))) {
@@ -215,7 +222,7 @@ export async function POST(request: Request) {
             CONTROLE: { $: item.control || " " },
             CODVOL: { $: item.volume },
             NUTAB: { $: String(item.priceTable) },
-            PERCDESC: { $: "0" },
+            PERCDESC: { $: String(-Number(item.adjustmentPercent || 0)) },
             VLRUNIT: { $: String(item.unitPrice) },
             IGNOREDESCPROMOQTD: { $: "True" },
           })),

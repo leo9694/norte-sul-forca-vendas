@@ -3,6 +3,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  Barcode,
   Bell,
   Box,
   Building2,
@@ -83,7 +84,7 @@ type ProductLot = ApiRow & {
   RESERVADO: number;
   DISPONIVEL: number;
 };
-type CartItem = Product & { quantity: number };
+type CartItem = Product & { quantity: number; adjustmentPercent?: number };
 type PriceTable = { CODEMP?: number; CODTAB: number; NOMETAB: string };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
 type OrderOperation = { CODTIPOPER: number; DESCROPER: string };
@@ -112,6 +113,7 @@ type OrderDraft = {
   id: string;
   updatedAt: number;
   sellerId?: number;
+  sellerName?: string;
   phase: OrderPhase;
   partner: Partner;
   companyCode?: number;
@@ -227,6 +229,14 @@ type Client = ApiRow & {
 
 const money = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+const itemAdjustment = (item: Pick<CartItem, "adjustmentPercent">) => {
+  const value = Number(item.adjustmentPercent || 0);
+  return Number.isFinite(value) ? value : 0;
+};
+const adjustedUnitPrice = (item: Pick<CartItem, "VLRVENDA" | "adjustmentPercent">) =>
+  Number(item.VLRVENDA) * (1 + itemAdjustment(item) / 100);
+const cartItemTotal = (item: CartItem) => adjustedUnitPrice(item) * item.quantity;
+const cartTotal = (cart: CartItem[]) => cart.reduce((sum, item) => sum + cartItemTotal(item), 0);
 
 const compactMoney = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -309,7 +319,7 @@ async function imageDataUrl(url: string) {
   });
 }
 
-async function shareDraftOrderReport(draft: OrderDraft, sellerName: string) {
+async function shareDraftOrderReport(draft: OrderDraft, sellerName: string, withReference = false) {
   const isMobileDevice = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
   const desktopReportWindow = isMobileDevice ? null : window.open("about:blank", "_blank");
   const { jsPDF } = await import("jspdf");
@@ -319,9 +329,11 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string) {
   const margin = 10;
   const width = pageWidth - margin * 2;
   const black = [0, 0, 0] as const;
-  const total = draft.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0);
+  const total = cartTotal(draft.cart);
   const fileBase = `${draft.partner.NOMEPARC}-${draft.id}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
-  const fileName = `pedido-${fileBase || "rascunho"}.pdf`;
+  const reportTitle = withReference ? "Pedido com Código de barras" : "Pedido de venda";
+  const fileName = `${withReference ? "pedido-com-codigo-de-barras" : "pedido"}-${fileBase || "rascunho"}.pdf`;
+  pdf.setProperties({ title: reportTitle, subject: `Pedido de ${draft.partner.NOMEPARC}` });
   let y = 15;
 
   const pageHeader = (continuation = false) => {
@@ -402,8 +414,12 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string) {
   cell(dateBoxX + 29, y, 43, 10, new Date(draft.updatedAt).toLocaleDateString("pt-BR"), "center");
   y += 22;
 
-  const headers = ["Cód.", "Descrição", "Un.", "Qtd", "Vlr Unit", "Impostos", "Valor Total"];
-  const columns = [16, 75, 13, 13, 25, 25, 28];
+  const headers = withReference
+    ? ["Cód.", "Descrição", "Código de barras", "Un.", "Qtd", "Vlr Unit", "Impostos", "Valor Total"]
+    : ["Cód.", "Descrição", "Un.", "Qtd", "Vlr Unit", "Impostos", "Valor Total"];
+  const columns = withReference
+    ? [16, 53, 22, 13, 13, 25, 25, 28]
+    : [16, 75, 13, 13, 25, 25, 28];
   const drawTableHeader = () => {
     ensureSpace(10);
     let x = margin;
@@ -416,15 +432,21 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string) {
   drawTableHeader();
   draft.cart.forEach((item, index) => {
     const description = pdf.splitTextToSize(item.DESCRPROD, columns[1] - 6) as string[];
-    const height = Math.max(8, description.length * 3.5 + 3);
+    const reference = withReference
+      ? pdf.splitTextToSize(String(item.REFERENCIA || "--"), columns[2] - 4) as string[]
+      : [];
+    const height = Math.max(8, Math.max(description.length, reference.length) * 3.5 + 3);
     if (y + height > pageHeight - 14) {
       addPage();
       drawTableHeader();
     }
-    const values = [String(item.CODPROD), description, item.CODVOL, item.quantity.toLocaleString("pt-BR"), money(Number(item.VLRVENDA)), "R$ 0,00", money(item.quantity * Number(item.VLRVENDA))];
+    const values = withReference
+      ? [String(item.CODPROD), description, reference, item.CODVOL, item.quantity.toLocaleString("pt-BR"), money(adjustedUnitPrice(item)), "R$ 0,00", money(cartItemTotal(item))]
+      : [String(item.CODPROD), description, item.CODVOL, item.quantity.toLocaleString("pt-BR"), money(adjustedUnitPrice(item)), "R$ 0,00", money(cartItemTotal(item))];
     let x = margin;
     values.forEach((value, valueIndex) => {
-      cell(x, y, columns[valueIndex], height, value as string | string[], valueIndex >= 3 ? "right" : valueIndex === 1 ? "left" : "center");
+      const quantityIndex = withReference ? 4 : 3;
+      cell(x, y, columns[valueIndex], height, value as string | string[], valueIndex >= quantityIndex ? "right" : valueIndex === 1 ? "left" : "center");
       x += columns[valueIndex];
     });
     y += height;
@@ -456,7 +478,7 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string) {
   const file = new File([reportBlob], fileName, { type: "application/pdf" });
   const canShareFile = typeof navigator !== "undefined" && typeof navigator.share === "function" && (!navigator.canShare || navigator.canShare({ files: [file] }));
   if (canShareFile) {
-    await navigator.share({ files: [file], title: "Pedido de venda", text: `Pedido de ${draft.partner.NOMEPARC}` });
+    await navigator.share({ files: [file], title: reportTitle, text: `${reportTitle} - ${draft.partner.NOMEPARC}` });
     return;
   }
   pdf.save(fileName);
@@ -1542,6 +1564,7 @@ export function SalesApp() {
             orders={orders}
             loading={loadingOrders}
             drafts={drafts}
+            offlineData={offlineData}
             online={online}
             canAnalyzeSellers={canMonitorSales}
             currentSellerId={sellerId}
@@ -1560,6 +1583,7 @@ export function SalesApp() {
               setActiveDraft(draft);
               setStartingPartner(draft.partner);
               setOrderSellerId(draft.sellerId ?? sellerId);
+              setOrderSellerName(draft.sellerName || (Number(draft.sellerId || sellerId) === sellerId ? sellerName : ""));
               pushHistoryView("new");
               setScreen("new");
             }}
@@ -1597,6 +1621,7 @@ export function SalesApp() {
             partner={startingPartner!}
             draft={activeDraft}
             actingSellerId={orderSellerId ?? sellerId}
+            actingSellerName={orderSellerName || sellerName || user}
             ownSellerId={sellerId}
             offlineData={offlineData}
             online={online}
@@ -2642,6 +2667,7 @@ function OrdersScreen({
   orders,
   loading,
   drafts,
+  offlineData,
   online,
   canAnalyzeSellers,
   currentSellerId,
@@ -2655,6 +2681,7 @@ function OrdersScreen({
   orders: ApiRow[];
   loading: boolean;
   drafts: OrderDraft[];
+  offlineData: OfflineSnapshot | null;
   online: boolean;
   canAnalyzeSellers: boolean;
   currentSellerId: number;
@@ -2677,8 +2704,10 @@ function OrdersScreen({
   const [draftPendingSend, setDraftPendingSend] = useState<OrderDraft | null>(null);
   const [sendingDraft, setSendingDraft] = useState(false);
   const [draftSendError, setDraftSendError] = useState("");
-  const [reportingDraftId, setReportingDraftId] = useState<string | null>(null);
+  const [reportingDraftKey, setReportingDraftKey] = useState<string | null>(null);
   const [draftReportError, setDraftReportError] = useState("");
+  const [openingOrderDocument, setOpeningOrderDocument] = useState<string | null>(null);
+  const [orderDocumentError, setOrderDocumentError] = useState("");
   useEffect(() => setSelectedSellerId(currentSellerId), [currentSellerId]);
   useEffect(() => {
     if (!draftMenuId) return;
@@ -2706,14 +2735,17 @@ function OrdersScreen({
     start.setDate(start.getDate() + 1);
     return inputDate(start);
   };
+  const sellerNameForDraft = (draft: OrderDraft) => draft.sellerName
+    || sellers.find((seller) => Number(seller.CODVEND) === Number(draft.sellerId || currentSellerId))?.APELIDO
+    || currentSellerName;
   const filtered = orders.filter((order) => {
     const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
     const state = order.STATUSNOTA === "L" ? "Enviados" : "Aguardando";
     return matchesSearch && filter !== "Rascunhos" && (filter === "Todos" || filter === state);
   });
   const filteredDrafts = drafts.filter((draft) => {
-    const matchesSearch = `${draft.partner.NOMEPARC} ${draft.partner.CODPARC}`.toLowerCase().includes(query.toLowerCase());
-    return selectedSellerId === currentSellerId && matchesSearch && (filter === "Todos" || filter === "Rascunhos");
+    const matchesSearch = `${draft.partner.NOMEPARC} ${draft.partner.CODPARC} ${draft.sellerName || ""}`.toLowerCase().includes(query.toLowerCase());
+    return matchesSearch && (filter === "Todos" || filter === "Rascunhos");
   });
   const total = orders.reduce((sum, order) => sum + Number(order.VLRNOTA || 0), 0);
   const sendDraft = async () => {
@@ -2734,6 +2766,7 @@ function OrdersScreen({
           observation: draftPendingSend.observation,
           items: draftPendingSend.cart.map((item) => ({
             product: Number(item.CODPROD), quantity: item.quantity, unitPrice: Number(item.VLRVENDA),
+            adjustmentPercent: itemAdjustment(item),
             volume: item.CODVOL, location: Number(item.CODLOCAL), control: item.CONTROLE, priceTable: Number(item.NUTAB),
           })),
         }),
@@ -2746,17 +2779,76 @@ function OrdersScreen({
       setSendingDraft(false);
     }
   };
-  const reportDraft = async (draft: OrderDraft) => {
-    setReportingDraftId(draft.id);
+  const reportDraft = async (draft: OrderDraft, withReference = false) => {
+    const reportKey = `${draft.id}:${withReference ? "barcode" : "standard"}`;
+    setReportingDraftKey(reportKey);
     setDraftReportError("");
     try {
-      await shareDraftOrderReport(draft, currentSellerName);
+      let reportDraftData = draft;
+      if (withReference) {
+        const references = new Map<number, string>();
+        (offlineData?.products ?? []).forEach((product) => {
+          if (product.REFERENCIA) references.set(Number(product.CODPROD), String(product.REFERENCIA));
+        });
+        const missingCodes = [...new Set(draft.cart
+          .filter((item) => !item.REFERENCIA && !references.has(Number(item.CODPROD)))
+          .map((item) => Number(item.CODPROD))
+          .filter((code) => code > 0))];
+        if (online && missingCodes.length) {
+          const result = await api<{ rows: Array<{ CODPROD: number; REFERENCIA?: string | null }> }>(
+            `/api/sankhya/data?kind=productReferences&products=${missingCodes.join(",")}`,
+          );
+          result.rows.forEach((product) => {
+            if (product.REFERENCIA) references.set(Number(product.CODPROD), String(product.REFERENCIA));
+          });
+        }
+        reportDraftData = {
+          ...draft,
+          cart: draft.cart.map((item) => ({
+            ...item,
+            REFERENCIA: item.REFERENCIA || references.get(Number(item.CODPROD)) || null,
+          })),
+        };
+      }
+      await shareDraftOrderReport(reportDraftData, sellerNameForDraft(draft), withReference);
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
         setDraftReportError(err instanceof Error ? err.message : "Não foi possível gerar o relatório.");
       }
     } finally {
-      setReportingDraftId(null);
+      setReportingDraftKey(null);
+    }
+  };
+  const openOrderPdf = async (order: ApiRow, action: "danfe" | "boleto") => {
+    const key = `${order.NUNOTA}:${action}`;
+    const popup = window.open("about:blank", "_blank");
+    if (!popup) {
+      setOrderDocumentError("O navegador bloqueou a nova aba. Permita pop-ups para abrir o documento.");
+      return;
+    }
+    popup.document.title = action === "danfe" ? "Carregando DANFE" : "Carregando boleto";
+    popup.document.body.textContent = "Carregando documento do Sankhya...";
+    popup.document.body.style.cssText = "font: 16px Arial; padding: 32px; color: #174d39";
+    setOpeningOrderDocument(key);
+    setOrderDocumentError("");
+    try {
+      const response = await fetch(`/api/sankhya/order-documents?nunota=${Number(order.NUNOTA)}&action=${action}`);
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(result.error || "Documento não disponível no Sankhya.");
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (new TextDecoder().decode(bytes.slice(0, 4)) !== "%PDF") throw new Error("O Sankhya retornou um arquivo inválido.");
+      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      popup.location.replace(objectUrl);
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10 * 60 * 1000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível abrir o documento.";
+      popup.document.title = "Documento indisponível";
+      popup.document.body.textContent = message;
+      setOrderDocumentError(message);
+    } finally {
+      setOpeningOrderDocument(null);
     }
   };
 
@@ -2834,20 +2926,24 @@ function OrdersScreen({
           {filteredDrafts.map((draft) => (
             <article className="order-card draft-card" key={draft.id}>
               <span className="order-icon"><FileText /></span>
-              <div className="order-client"><strong>{draft.partner.NOMEPARC}</strong><small>Rascunho automático</small></div>
+              <div className="order-client"><strong>{draft.partner.NOMEPARC}</strong><small>Rascunho automático · Vendedor: {sellerNameForDraft(draft)}</small></div>
               <div className="order-date"><small>{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</small></div>
-              <div className="order-total"><strong>{money(draft.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0))}</strong></div>
-              <button className="status draft" onClick={() => onResume(draft)}><FileText size={15} /> Continuar</button>
+              <div className="order-total"><strong>{money(cartTotal(draft.cart))}</strong></div>
+              <button className="status draft" onClick={() => onResume({ ...draft, sellerName: sellerNameForDraft(draft) })}><FileText size={15} /> Continuar</button>
               <div className="draft-actions" onClick={(event) => event.stopPropagation()}>
                 <button className="draft-menu-trigger" aria-label="Mais opções do rascunho" aria-expanded={draftMenuId === draft.id} onClick={() => setDraftMenuId((current) => current === draft.id ? null : draft.id)}>•••</button>
                 {draftMenuId === draft.id && (
                   <div className="draft-menu" role="menu">
-                    <button role="menuitem" className="draft-report" disabled={reportingDraftId === draft.id} onClick={() => {
+                    <button role="menuitem" className="draft-report" disabled={reportingDraftKey !== null} onClick={() => {
                       setDraftMenuId(null);
                       void reportDraft(draft);
-                    }}>{reportingDraftId === draft.id ? <LoaderCircle className="spin" size={14} /> : <FileText size={14} />} Relatório do pedido</button>
+                    }}>{reportingDraftKey === `${draft.id}:standard` ? <LoaderCircle className="spin" size={14} /> : <FileText size={14} />} Relatório do pedido</button>
+                    <button role="menuitem" className="draft-report" disabled={reportingDraftKey !== null} onClick={() => {
+                      setDraftMenuId(null);
+                      void reportDraft(draft, true);
+                    }}>{reportingDraftKey === `${draft.id}:barcode` ? <LoaderCircle className="spin" size={14} /> : <Barcode size={14} />} Pedido com Código de barras</button>
                     <button role="menuitem" className="send-draft" disabled={!online || !draft.cart.length} onClick={() => {
-                      setDraftPendingSend(draft);
+                      setDraftPendingSend({ ...draft, sellerName: sellerNameForDraft(draft) });
                       setDraftSendError("");
                       setDraftMenuId(null);
                     }}><Send size={14} /> Enviar</button>
@@ -2866,9 +2962,15 @@ function OrdersScreen({
               <div className="order-rich-content">
                 <div className="order-rich-head">
                   <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)}</span></div></div>
-                  <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
-                    {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
-                  </span>
+                  <div className="order-rich-actions">
+                    <div className="order-document-links">
+                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir DANFE em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
+                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir boleto em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
+                    </div>
+                    <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
+                      {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
+                    </span>
+                  </div>
                 </div>
                 <div className="order-rich-meta">
                   <span><CalendarDays size={22} /><span><small>Emissão</small>{sankhyaDate(order.DTNEG)}</span></span>
@@ -2885,6 +2987,7 @@ function OrdersScreen({
         </div>
       </section>
       {draftReportError && <div className="global-error">{draftReportError}</div>}
+      {orderDocumentError && <div className="global-error">{orderDocumentError}</div>}
       {draftPendingDeletion && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Excluir rascunho">
           <div className="confirm-modal draft-delete-modal">
@@ -2909,7 +3012,7 @@ function OrdersScreen({
             <span className="confirm-icon"><Send size={27} /></span>
             <h2>Enviar pedido ao Sankhya?</h2>
             <p>O rascunho será validado novamente antes do envio.</p>
-            <div className="confirm-summary"><span><small>Cliente</small><strong>{draftPendingSend.partner.NOMEPARC}</strong></span><span><small>Total</small><strong>{money(draftPendingSend.cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0))}</strong></span></div>
+            <div className="confirm-summary"><span><small>Cliente</small><strong>{draftPendingSend.partner.NOMEPARC}</strong></span><span><small>Vendedor</small><strong>{sellerNameForDraft(draftPendingSend)}</strong></span><span><small>Total</small><strong>{money(cartTotal(draftPendingSend.cart))}</strong></span></div>
             {draftSendError && <div className="global-error">{draftSendError}</div>}
             <div className="modal-actions"><button className="secondary" onClick={() => setDraftPendingSend(null)}>Cancelar</button><button className="primary" onClick={sendDraft} disabled={sendingDraft}>{sendingDraft ? <LoaderCircle className="spin" /> : <><Send size={18} /> Salvar e enviar</>}</button></div>
           </div>
@@ -3482,6 +3585,7 @@ function NewOrderV2({
   partner,
   draft,
   actingSellerId,
+  actingSellerName,
   ownSellerId,
   offlineData,
   online,
@@ -3493,6 +3597,7 @@ function NewOrderV2({
   partner: Partner;
   draft: OrderDraft | null;
   actingSellerId: number;
+  actingSellerName: string;
   ownSellerId: number;
   offlineData: OfflineSnapshot | null;
   online: boolean;
@@ -3552,7 +3657,7 @@ function NewOrderV2({
   const availableNegotiations = operation === 6
     ? negotiations.filter((item) => Number(item.CODTIPVENDA) === 53)
     : negotiations;
-  const total = useMemo(() => cart.reduce((sum, item) => sum + Number(item.VLRVENDA) * item.quantity, 0), [cart]);
+  const total = useMemo(() => cartTotal(cart), [cart]);
   const totalUnits = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   const goToPhase = (nextPhase: OrderPhase) => {
@@ -3786,6 +3891,7 @@ function NewOrderV2({
     id: draftId,
     updatedAt: Date.now(),
     sellerId: actingSellerId,
+    sellerName: actingSellerName,
     phase,
     partner,
     companyCode,
@@ -3969,6 +4075,15 @@ function NewOrderV2({
 
   const quantityOf = (product: Product) =>
     cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL)?.quantity || 0;
+  const cartItemOf = (product: Product) =>
+    cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
+  const setAdjustment = (product: Product, value: string) => {
+    const parsed = Number(value.replace(",", "."));
+    const adjustmentPercent = Number.isFinite(parsed) ? Math.max(-99.99, Math.min(999.99, parsed)) : 0;
+    setCart((current) => current.map((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL
+      ? { ...item, adjustmentPercent }
+      : item));
+  };
 
   const openProductDetails = (product: Product) => {
     setProductDetails(product);
@@ -4128,6 +4243,7 @@ function NewOrderV2({
             product: Number(item.CODPROD),
             quantity: item.quantity,
             unitPrice: Number(item.VLRVENDA),
+            adjustmentPercent: itemAdjustment(item),
             volume: item.CODVOL,
             location: Number(item.CODLOCAL),
             control: item.CONTROLE,
@@ -4150,7 +4266,7 @@ function NewOrderV2({
     <div className="page new-order-page">
       <header className="new-header">
         <button className="back-button" onClick={closeOrder}><ArrowLeft size={20} /></button>
-        <div><span className="eyebrow">Pedido de venda</span><h1>{draft ? "Continuar pedido" : "Novo pedido"}</h1></div>
+        <div><span className="eyebrow">Pedido de venda</span><h1>{draft ? "Continuar pedido" : "Novo pedido"} — {actingSellerName}</h1></div>
         <span className="draft-saved"><FileText size={15} /> Rascunho automático</span>
         <span className={`sync-badge ${online ? "" : "offline"}`}>
           {online ? <CloudCheck size={16} /> : <CloudOff size={16} />}
@@ -4266,7 +4382,7 @@ function NewOrderV2({
                       <div className="product-info"><button className="product-name-button" onClick={() => openProductDetails(product)} title={`Ver lotes de ${product.DESCRPROD}`}><strong>{product.DESCRPROD}</strong></button><small>Cód. {product.CODPROD} · {product.CODVOL}{product.MARCA ? ` · ${product.MARCA}` : ""}</small><span className="product-stock"><PackageCheck size={14} /><strong>{Number(product.DISPONIVEL).toLocaleString("pt-BR")}</strong> disponíveis</span></div>
                       <div className="product-price"><strong>{money(Number(product.VLRVENDA))}</strong><small>por {product.CODVOL}</small></div>
                       {quantityOf(product) ? (
-                        <div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div>
+                        <div className="product-order-controls"><div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div><label className="item-adjustment"><span>− Desc. / + Acrésc.</span><input key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}-${itemAdjustment(cartItemOf(product) || { adjustmentPercent: 0 })}`} type="text" inputMode="decimal" title="Use negativo para desconto e positivo para acréscimo" defaultValue={itemAdjustment(cartItemOf(product) || { adjustmentPercent: 0 }).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(product, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${product.DESCRPROD}`} /><b>%</b></label></div>
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
                     </article>
                   ))}
@@ -4281,7 +4397,7 @@ function NewOrderV2({
             <div className="section-heading"><div><span className="eyebrow">Revisão</span><h2>Revise seu pedido</h2><p>Confira as condições e os itens antes de validar o envio.</p></div></div>
             <div className="review-grid">
               <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => goToPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Empresa</dt><dd>{selectedCompany ? `${selectedCompany.CODEMP} — ${selectedCompany.NOMEFANTASIA}` : companyCode}</dd></div><div><dt>Operação</dt><dd>TOP {operation} — {selectedOperation?.DESCROPER || ""}</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
-              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><div><strong>{item.DESCRPROD}</strong><small>{money(Number(item.VLRVENDA))} / {item.CODVOL}</small></div><strong>{money(item.quantity * Number(item.VLRVENDA))}</strong><div className="review-item-quantity"><button onClick={() => setQuantity(item, -1)} aria-label={`Diminuir ${item.DESCRPROD}`}><Minus size={14} /></button><strong>{item.quantity}×</strong><button onClick={() => setQuantity(item, 1)} aria-label={`Aumentar ${item.DESCRPROD}`}><Plus size={14} /></button></div></div>)}</article>
+              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><div><strong>{item.DESCRPROD}</strong><small>{money(adjustedUnitPrice(item))} / {item.CODVOL}{itemAdjustment(item) ? ` · ${itemAdjustment(item) < 0 ? "Desconto" : "Acréscimo"} ${Math.abs(itemAdjustment(item)).toLocaleString("pt-BR")}%` : ""}</small></div><strong>{money(cartItemTotal(item))}</strong><div className="review-item-controls"><div className="review-item-quantity"><button onClick={() => setQuantity(item, -1)} aria-label={`Diminuir ${item.DESCRPROD}`}><Minus size={14} /></button><strong>{item.quantity}×</strong><button onClick={() => setQuantity(item, 1)} aria-label={`Aumentar ${item.DESCRPROD}`}><Plus size={14} /></button></div><label className="item-adjustment review-adjustment"><input type="text" inputMode="decimal" defaultValue={itemAdjustment(item).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(item, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${item.DESCRPROD}`} /><b>%</b></label></div></div>)}</article>
             </div>
             {observation && <div className="review-observation"><small>Observação</small><p>{observation}</p></div>}
             <div className="order-summary"><span><small>{totalUnits} {totalUnits === 1 ? "unidade" : "unidades"}</small><strong>Total do pedido</strong></span><strong>{money(total)}</strong></div>
@@ -4398,7 +4514,7 @@ function NewOrderV2({
               <div className="product-details-order">
                 <span><small>Quantidade no pedido</small>{Number(productDetails.AGRUPMIN || 0) > 1 && <em>Múltiplos de {Number(productDetails.AGRUPMIN).toLocaleString("pt-BR")}</em>}</span>
                 {quantityOf(productDetails) ? (
-                  <div className="quantity"><button onClick={() => setQuantity(productDetails, -1)} aria-label={`Diminuir ${productDetails.DESCRPROD}`}><Minus size={17} /></button><strong>{quantityOf(productDetails)}</strong><button onClick={() => setQuantity(productDetails, 1)} aria-label={`Aumentar ${productDetails.DESCRPROD}`}><Plus size={17} /></button></div>
+                  <div className="product-details-controls"><div className="quantity"><button onClick={() => setQuantity(productDetails, -1)} aria-label={`Diminuir ${productDetails.DESCRPROD}`}><Minus size={17} /></button><strong>{quantityOf(productDetails)}</strong><button onClick={() => setQuantity(productDetails, 1)} aria-label={`Aumentar ${productDetails.DESCRPROD}`}><Plus size={17} /></button></div><label className="item-adjustment"><span>Desc. − / Acrésc. +</span><input type="text" inputMode="decimal" defaultValue={itemAdjustment(cartItemOf(productDetails) || { adjustmentPercent: 0 }).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(productDetails, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${productDetails.DESCRPROD}`} /><b>%</b></label></div>
                 ) : <button className="add-button" onClick={() => setQuantity(productDetails, 1)}><Plus size={17} /> Adicionar</button>}
               </div>
             </div>
