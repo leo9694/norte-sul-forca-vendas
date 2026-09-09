@@ -1,4 +1,5 @@
 import { executeQuery, requireSession } from "../../_lib/sankhya";
+import { priceInheritanceCtes } from "../../_lib/price-inheritance";
 
 export async function GET(request: Request) {
   try {
@@ -91,7 +92,7 @@ export async function GET(request: Request) {
          ORDER BY O.CODTIPOPER
       `),
       executeQuery(session, `
-        WITH TABELAS AS (
+        WITH ${priceInheritanceCtes()}, TABELAS AS (
           SELECT DISTINCT E.CODEMP, E.CODTAB
             FROM TGFPAR CL
             JOIN TGFPAEM E ON E.CODPARC = CL.CODPARC
@@ -115,12 +116,14 @@ export async function GET(request: Request) {
            HAVING SUM(ESTOQUE - RESERVADO) > 0
         ),
         PRECOS AS (
-          SELECT TB.CODEMP, T.CODTAB, X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
+          SELECT TB.CODEMP, TB.CODTAB, X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
                  NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
-                 X.VLRVENDA, T.NUTAB, T.DTVIGOR
+                 X.VLRVENDA * (1 + H.PERCENTUAL / 100) VLRVENDA,
+                 T.NUTAB, T.DTVIGOR, H.PRIORIDADE
             FROM TGFEXC X
             JOIN TGFTAB T ON T.NUTAB = X.NUTAB
-            JOIN TABELAS TB ON TB.CODTAB = T.CODTAB
+            JOIN HERANCA_PRECOS H ON H.CODTAB_FONTE = T.CODTAB AND H.CICLO = 'N'
+            JOIN TABELAS TB ON TB.CODTAB = H.CODTAB
            WHERE T.DTVIGOR <= TRUNC(SYSDATE)
         ),
         ITENS AS (
@@ -132,7 +135,7 @@ export async function GET(request: Request) {
                  PR.NUTAB, PR.VLRVENDA,
                  ROW_NUMBER() OVER (
                    PARTITION BY PR.CODEMP, PR.CODTAB, P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
-                   ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                   ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC,
                             CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
                             CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
                  ) RN

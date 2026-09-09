@@ -1,4 +1,5 @@
 import { canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
+import { priceInheritanceCtes } from "../../_lib/price-inheritance";
 
 const numeric = (value: string | null, fallback = 0) => {
   const parsed = Number(value);
@@ -669,7 +670,7 @@ export async function GET(request: Request) {
       }
       const brandFilter = brand ? `AND UPPER(TRIM(P.MARCA)) = '${brand}'` : "";
       const eligibleItems = `
-        WITH ESTOQUE AS (
+        WITH ${priceInheritanceCtes()}, ESTOQUE AS (
           SELECT CODPROD, CODLOCAL, CONTROLE,
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
@@ -680,10 +681,12 @@ export async function GET(request: Request) {
         PRECOS AS (
           SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
                  NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
-                 X.VLRVENDA, T.NUTAB, T.DTVIGOR
+                 X.VLRVENDA * (1 + H.PERCENTUAL / 100) VLRVENDA,
+                 T.NUTAB, T.DTVIGOR, H.PRIORIDADE
             FROM TGFEXC X
             JOIN TGFTAB T ON T.NUTAB = X.NUTAB
-           WHERE T.CODTAB = ${priceCode}
+            JOIN HERANCA_PRECOS H ON H.CODTAB_FONTE = T.CODTAB AND H.CICLO = 'N'
+           WHERE H.CODTAB = ${priceCode}
              AND T.DTVIGOR <= TRUNC(SYSDATE)
         ),
         ITENS AS (
@@ -691,7 +694,7 @@ export async function GET(request: Request) {
                  PR.VLRVENDA,
                  ROW_NUMBER() OVER (
                    PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
-                   ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                   ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC,
                             CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
                             CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
                  ) RN
@@ -841,7 +844,7 @@ export async function GET(request: Request) {
            END`
         : "0";
       const rows = await executeQuery(session, `
-        WITH ESTOQUE AS (
+        WITH ${priceInheritanceCtes()}, ESTOQUE AS (
           SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
                  MAX(DTFABRICACAO) DTFABRICACAO, MAX(DTVAL) DTVAL,
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
@@ -853,10 +856,12 @@ export async function GET(request: Request) {
         PRECOS AS (
           SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
                  NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
-                 X.VLRVENDA, T.NUTAB, T.DTVIGOR
+                 X.VLRVENDA * (1 + H.PERCENTUAL / 100) VLRVENDA,
+                 T.NUTAB, T.DTVIGOR, H.PRIORIDADE
             FROM TGFEXC X
             JOIN TGFTAB T ON T.NUTAB = X.NUTAB
-           WHERE T.CODTAB = ${priceCode}
+            JOIN HERANCA_PRECOS H ON H.CODTAB_FONTE = T.CODTAB AND H.CICLO = 'N'
+           WHERE H.CODTAB = ${priceCode}
              AND T.DTVIGOR <= TRUNC(SYSDATE)
         )${bestSellersCte},
         ITENS AS (
@@ -868,7 +873,7 @@ export async function GET(request: Request) {
                  ${relevance} RELEVANCIA,
                  ROW_NUMBER() OVER (
                    PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
-                   ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                   ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC,
                             CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
                             CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
                  ) RN

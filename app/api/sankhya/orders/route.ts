@@ -1,4 +1,5 @@
 import { callSankhya, canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
+import { priceInheritanceCtes } from "../../_lib/price-inheritance";
 
 type OrderItem = {
   product: number;
@@ -116,7 +117,7 @@ export async function POST(request: Request) {
 
     const productCodes = items.map((item) => item.product).join(",");
     const validRows = await executeQuery(session, `
-      WITH ESTOQUE AS (
+      WITH ${priceInheritanceCtes()}, ESTOQUE AS (
         SELECT CODPROD, CODLOCAL, CONTROLE,
                SUM(ESTOQUE - RESERVADO) DISPONIVEL
           FROM TGFEST
@@ -129,10 +130,12 @@ export async function POST(request: Request) {
       PRECOS AS (
         SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
                NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
-               X.VLRVENDA, T.NUTAB, T.DTVIGOR
+               X.VLRVENDA * (1 + H.PERCENTUAL / 100) VLRVENDA,
+               T.NUTAB, T.DTVIGOR, H.PRIORIDADE
           FROM TGFEXC X
           JOIN TGFTAB T ON T.NUTAB = X.NUTAB
-         WHERE T.CODTAB = ${priceCode}
+          JOIN HERANCA_PRECOS H ON H.CODTAB_FONTE = T.CODTAB AND H.CICLO = 'N'
+         WHERE H.CODTAB = ${priceCode}
            AND T.DTVIGOR <= TRUNC(SYSDATE)
            AND X.CODPROD IN (${productCodes})
       ),
@@ -141,7 +144,7 @@ export async function POST(request: Request) {
                PR.NUTAB, PR.VLRVENDA,
                ROW_NUMBER() OVER (
                  PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
-                 ORDER BY PR.DTVIGOR DESC, PR.NUTAB DESC,
+                 ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC,
                           CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
                           CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
                ) RN
