@@ -3065,6 +3065,13 @@ function OrdersScreen({
                 <div className="order-rich-head">
                   <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)} · {Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
                   <div className="order-rich-actions">
+                    <div className="order-document-links">
+                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir DANFE em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
+                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir boleto em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
+                    </div>
+                    <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
+                      {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
+                    </span>
                     <div className="draft-actions sent-order-actions" onClick={(event) => event.stopPropagation()}>
                       <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}><MoreVertical size={20} /></button>
                       {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
@@ -3073,13 +3080,6 @@ function OrdersScreen({
                         {!online && <small>Conecte-se para consultar os itens do pedido.</small>}
                       </div>}
                     </div>
-                    <div className="order-document-links">
-                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir DANFE em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
-                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir boleto em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
-                    </div>
-                    <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
-                      {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
-                    </span>
                   </div>
                 </div>
                 <div className="order-rich-meta">
