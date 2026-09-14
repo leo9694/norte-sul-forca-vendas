@@ -266,12 +266,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .draft-card .status { border: 0; cursor: pointer; }
 .draft-actions { position: absolute; top: 9px; right: 10px; z-index: 2; }
 .sent-order-actions { position: relative; top: auto; right: auto; flex-shrink: 0; }
-.sent-order-actions .draft-menu { width: 230px; max-width: calc(100vw - 40px); }
+.sent-order-actions .draft-menu, .draft-card .draft-menu { width: 230px; max-width: calc(100vw - 40px); }
 .sent-order-actions .draft-menu small { display: block; padding: 8px; color: var(--muted); font-size: 10px; }
 .draft-menu-trigger { width: 30px; height: 30px; display: grid; place-items: center; padding: 0 0 5px; border: 0; border-radius: 8px; background: transparent; color: #6d8076; font-size: 17px; font-weight: 900; letter-spacing: 1px; line-height: 1; cursor: pointer; }
 .draft-menu-trigger:hover, .draft-menu-trigger[aria-expanded="true"] { background: #eef5f1; color: var(--green); }
 .draft-menu { position: absolute; top: 35px; right: 0; min-width: 150px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: white; box-shadow: 0 12px 28px rgba(7, 43, 28, .14); }
-.draft-menu button { width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 11px; font-weight: 750; cursor: pointer; }
+.draft-menu button { width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; text-align: left; font-size: 11px; font-weight: 750; white-space: nowrap; cursor: pointer; }
 .draft-menu .send-draft { display: flex; align-items: center; gap: 7px; color: var(--green); }
 .draft-menu .send-draft:hover { background: var(--green-soft); }
 .draft-menu .send-draft:disabled { opacity: .45; cursor: not-allowed; }
