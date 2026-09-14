@@ -334,9 +334,9 @@ async function imageDataUrl(url: string) {
   });
 }
 
-async function shareDraftOrderReport(draft: OrderDraft, sellerName: string, withReference = false) {
+async function shareDraftOrderReport(draft: OrderDraft, sellerName: string, withReference = false, reportWindow?: Window | null) {
   const isMobileDevice = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  const desktopReportWindow = isMobileDevice ? null : window.open("about:blank", "_blank");
+  const desktopReportWindow = reportWindow === undefined ? (isMobileDevice ? null : window.open("about:blank", "_blank")) : reportWindow;
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ unit: "mm", format: "letter", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
@@ -2897,6 +2897,29 @@ function OrdersScreen({
       setReportingDraftKey(null);
     }
   };
+  const reportSentOrder = async (order: ApiRow, withReference = false) => {
+    setDraftMenuId(null);
+    setDraftReportError("");
+    const isMobile = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const popup = isMobile ? null : window.open("about:blank", "_blank");
+    if (!isMobile && !popup) {
+      setDraftReportError("Permita pop-ups para abrir o relatório.");
+      return;
+    }
+    if (popup) popup.document.body.textContent = "Carregando relatório do pedido...";
+    setReportingDraftKey(`pedido-${order.NUNOTA}`);
+    try {
+      const result = await api<{ draft: OrderDraft }>(`/api/sankhya/order-report?nunota=${Number(order.NUNOTA)}`, { cache: "no-store" });
+      await shareDraftOrderReport(result.draft, result.draft.sellerName || "", withReference, popup);
+    } catch (error) {
+      popup?.close();
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setDraftReportError(error instanceof Error ? error.message : "Não foi possível gerar o relatório.");
+      }
+    } finally {
+      setReportingDraftKey(null);
+    }
+  };
   const openOrderPdf = async (order: ApiRow, action: "danfe" | "boleto") => {
     const key = `${order.NUNOTA}:${action}`;
     const popup = window.open("about:blank", "_blank");
@@ -3041,6 +3064,14 @@ function OrdersScreen({
                 <div className="order-rich-head">
                   <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)} · {Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
                   <div className="order-rich-actions">
+                    <div className="draft-actions sent-order-actions" onClick={(event) => event.stopPropagation()}>
+                      <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}>•••</button>
+                      {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
+                        <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order)}><FileText size={14} /> Relatório do pedido</button>
+                        <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order, true)}><Barcode size={14} /> Pedido com Código de barras</button>
+                        {!online && <small>Conecte-se para consultar os itens do pedido.</small>}
+                      </div>}
+                    </div>
                     <div className="order-document-links">
                       <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir DANFE em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
                       <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir boleto em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
