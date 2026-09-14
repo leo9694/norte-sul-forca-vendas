@@ -6,11 +6,17 @@ export async function GET(request: Request) {
     const id = Number(new URL(request.url).searchParams.get("nunota"));
     if (!Number.isSafeInteger(id) || id <= 0) return Response.json({ error: "Pedido inválido." }, { status: 400 });
     const [header] = await executeQuery(session, `
-      SELECT C.NUNOTA, C.CODPARC, P.NOMEPARC, P.CGC_CPF CGCCPF,
+      SELECT C.NUNOTA, C.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF CGCCPF,
+             E.NOMEEND ENDERECO, P.NUMEND, P.COMPLEMENTO, B.NOMEBAI BAIRRO, P.CEP,
+             P.TELEFONE, P.EMAIL, P.IDENTINSCESTAD INSCESTAD, CI.NOMECID, U.UF,
              C.CODEMP, C.CODTIPOPER, C.CODTIPVENDA, C.CODVEND,
              C.OBSERVACAO, TO_CHAR(C.DTNEG, 'YYYY-MM-DD') DTNEG,
              V.APELIDO, T.DESCRTIPVENDA
         FROM TGFCAB C JOIN TGFPAR P ON P.CODPARC = C.CODPARC
+        LEFT JOIN TSIEND E ON E.CODEND = P.CODEND
+        LEFT JOIN TSIBAI B ON B.CODBAI = P.CODBAI
+        LEFT JOIN TSICID CI ON CI.CODCID = P.CODCID
+        LEFT JOIN TSIUFS U ON U.CODUF = CI.UF
         LEFT JOIN TGFVEN V ON V.CODVEND = C.CODVEND
         LEFT JOIN TGFTPV T ON T.CODTIPVENDA = C.CODTIPVENDA AND T.DHALTER = C.DHTIPVENDA
        WHERE C.NUNOTA = ${id} AND C.TIPMOV = 'P' AND C.CODTIPOPER IN (5,6)
@@ -30,7 +36,12 @@ export async function GET(request: Request) {
     return Response.json({ draft: {
       id: `pedido-${id}`, updatedAt: new Date(`${header.DTNEG}T12:00:00-04:00`).getTime(),
       sellerId: Number(header.CODVEND), sellerName: String(header.APELIDO || ""),
-      phase: "review", partner: { CODPARC: Number(header.CODPARC), NOMEPARC: String(header.NOMEPARC), CGCCPF: header.CGCCPF },
+      phase: "review", partner: {
+        CODPARC: Number(header.CODPARC), NOMEPARC: String(header.NOMEPARC), RAZAOSOCIAL: header.RAZAOSOCIAL,
+        CGCCPF: header.CGCCPF, ENDERECO: header.ENDERECO, NUMEND: header.NUMEND, COMPLEMENTO: header.COMPLEMENTO,
+        BAIRRO: header.BAIRRO, CEP: header.CEP, TELEFONE: header.TELEFONE, EMAIL: header.EMAIL,
+        INSCESTAD: header.INSCESTAD, NOMECID: header.NOMECID, UF: header.UF,
+      },
       companyCode: Number(header.CODEMP), operation: Number(header.CODTIPOPER),
       priceCode: 0, priceName: "", negotiation: Number(header.CODTIPVENDA),
       negotiationName: String(header.DESCRTIPVENDA || ""), observation: String(header.OBSERVACAO || ""),

@@ -355,6 +355,14 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string, with
   let y = 15;
 
   const pageHeader = (continuation = false) => {
+    if (continuation) {
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      pdf.setTextColor(...black);
+      pdf.text("ITENS DO PEDIDO", margin, 18);
+      y = 24;
+      return;
+    }
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(10);
     pdf.setTextColor(...black);
@@ -370,12 +378,7 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string, with
     pdf.text("Insc. Estad.:", margin + 59, 29.2);
     pdf.setFont("helvetica", "normal");
     pdf.text("132376237", margin + 77, 29.2);
-    if (continuation) {
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(7);
-      pdf.text("ITENS DO PEDIDO", margin, 39);
-      y = 45;
-    } else y = 41;
+    y = 41;
   };
   const addPage = () => {
     pdf.addPage();
@@ -413,17 +416,21 @@ async function shareDraftOrderReport(draft: OrderDraft, sellerName: string, with
   section("D A D O S   D O   C L I E N T E");
   labelValue("Cliente", draft.partner.NOMEPARC, margin + 10, y);
   y += 5;
-  labelValue("Raz. Social", draft.partner.NOMEPARC, margin + 10, y);
+  labelValue("Raz. Social", String(draft.partner.RAZAOSOCIAL || draft.partner.NOMEPARC), margin + 10, y);
   y += 5;
-  labelValue("Endereço", "--", margin + 10, y);
+  const address = [draft.partner.ENDERECO, draft.partner.NUMEND, draft.partner.COMPLEMENTO, draft.partner.BAIRRO, draft.partner.NOMECID, draft.partner.UF]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  labelValue("Endereço", address, margin + 10, y);
   y += 5;
-  labelValue("CEP", "--", margin + 10, y);
-  labelValue("Fone", "--", margin + 52, y);
-  labelValue("Email", "--", margin + 93, y);
+  labelValue("CEP", String(draft.partner.CEP || "--"), margin + 10, y);
+  labelValue("Fone", String(draft.partner.TELEFONE || "--"), margin + 52, y);
+  labelValue("Email", String(draft.partner.EMAIL || "--"), margin + 93, y);
   y += 5;
   labelValue("Cod. Parc.", String(draft.partner.CODPARC), margin + 10, y);
   labelValue("CNPJ", String(draft.partner.CGCCPF || "--"), margin + 52, y);
-  labelValue("Insc. Estad.", "--", margin + 101, y);
+  labelValue("Insc. Estad.", String(draft.partner.INSCESTAD || "--"), margin + 101, y);
   y += 22;
 
   section("I N F O R M A Ç Õ E S   D A   N E G O C I A Ç Ã O");

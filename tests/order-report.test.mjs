@@ -4,12 +4,18 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
 const source = await readFile(new URL('../app/api/sankhya/order-report/route.ts', import.meta.url), 'utf8');
+test('report uses the Sankhya address, neighborhood and state lookup tables', () => {
+  assert.match(source, /LEFT JOIN TSIEND E ON E\.CODEND = P\.CODEND/);
+  assert.match(source, /LEFT JOIN TSIBAI B ON B\.CODBAI = P\.CODBAI/);
+  assert.match(source, /LEFT JOIN TSIUFS U ON U\.CODUF = CI\.UF/);
+});
+
 async function route({ seller = 10, manager = false, expired = false } = {}) {
   const queries = [];
   const session = { sellerId:10 };
   const executeQuery = async (_session, sql) => {
     queries.push(sql);
-    return sql.includes('FROM TGFCAB') ? [{CODVEND:seller, CODPARC:1,NOMEPARC:'Cliente',DTNEG:'2026-09-14',APELIDO:'Vendedor'}]
+    return sql.includes('FROM TGFCAB') ? [{CODVEND:seller, CODPARC:1,NOMEPARC:'Cliente',RAZAOSOCIAL:'Cliente Ltda',ENDERECO:'Rua Teste',NUMEND:'10',CEP:'78820-000',INSCESTAD:'123',NOMECID:'Jaciara',UF:'MT',DTNEG:'2026-09-14',APELIDO:'Vendedor'}]
       : [{CODPROD:2,DESCRPROD:'Produto',REFERENCIA:'789123',QTDNEG:5,VLRTOT:50,VLRDESC:5,VLRUNIT:10}];
   };
   const js = ts.transpileModule(source.replace(/^import[^\n]+\n/, ''), {compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -38,5 +44,8 @@ test('report carries item references and net prices for owner and manager', asyn
     assert.equal(draft.cart[0].VLRVENDA,9);
     assert.equal(draft.cart[0].quantity,5);
     assert.equal(draft.id,'pedido-1');
+    assert.equal(draft.partner.RAZAOSOCIAL,'Cliente Ltda');
+    assert.equal(draft.partner.ENDERECO,'Rua Teste');
+    assert.equal(draft.partner.INSCESTAD,'123');
   }
 });

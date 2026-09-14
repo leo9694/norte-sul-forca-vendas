@@ -548,9 +548,14 @@ export async function GET(request: Request) {
     if (kind === "portfolio") {
       const rows = await executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
-               P.TELEFONE, P.EMAIL, P.CODVEND,
+               E.NOMEEND ENDERECO, P.NUMEND, P.COMPLEMENTO, B.NOMEBAI BAIRRO, P.CEP,
+               P.TELEFONE, P.EMAIL, P.IDENTINSCESTAD INSCESTAD, CI.NOMECID, U.UF, P.CODVEND,
                E.CODEMP, E.GRUPOICMS, E.CODTAB
           FROM TGFPAR P
+          LEFT JOIN TSIEND E ON E.CODEND = P.CODEND
+          LEFT JOIN TSIBAI B ON B.CODBAI = P.CODBAI
+          LEFT JOIN TSICID CI ON CI.CODCID = P.CODCID
+          LEFT JOIN TSIUFS U ON U.CODUF = CI.UF
           LEFT JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
             AND E.CODEMP = (
               SELECT MIN(E2.CODEMP) FROM TGFPAEM E2
