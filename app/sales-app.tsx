@@ -27,6 +27,7 @@ import {
   Mail,
   Menu,
   MessageCircle,
+  MoreVertical,
   Minus,
   PackageCheck,
   Phone,
@@ -3032,7 +3033,7 @@ function OrdersScreen({
               <div className="order-total"><strong>{money(cartTotal(draft.cart))}</strong></div>
               <button className="status draft" onClick={() => onResume({ ...draft, sellerName: sellerNameForDraft(draft) })}><FileText size={15} /> Continuar</button>
               <div className="draft-actions" onClick={(event) => event.stopPropagation()}>
-                <button className="draft-menu-trigger" aria-label="Mais opções do rascunho" aria-expanded={draftMenuId === draft.id} onClick={() => setDraftMenuId((current) => current === draft.id ? null : draft.id)}>•••</button>
+                <button className="draft-menu-trigger" aria-label="Mais opções do rascunho" aria-expanded={draftMenuId === draft.id} onClick={() => setDraftMenuId((current) => current === draft.id ? null : draft.id)}><MoreVertical size={20} /></button>
                 {draftMenuId === draft.id && (
                   <div className="draft-menu" role="menu">
                     <button role="menuitem" className="draft-report" disabled={reportingDraftKey !== null} onClick={() => {
@@ -3065,7 +3066,7 @@ function OrdersScreen({
                   <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)} · {Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
                   <div className="order-rich-actions">
                     <div className="draft-actions sent-order-actions" onClick={(event) => event.stopPropagation()}>
-                      <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}>•••</button>
+                      <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}><MoreVertical size={20} /></button>
                       {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order)}><FileText size={14} /> Relatório do pedido</button>
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order, true)}><Barcode size={14} /> Pedido com Código de barras</button>
