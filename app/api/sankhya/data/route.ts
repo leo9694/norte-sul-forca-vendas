@@ -55,8 +55,8 @@ export async function GET(request: Request) {
         : "TRUNC(SYSDATE) + 1";
       const companyFilter = companyId ? `AND C.CODEMP = ${companyId}` : "";
       const period = `
-        C.DTNEG >= ${startExpression}
-        AND C.DTNEG < ${endExpression}
+        C.DTENTSAI >= ${startExpression}
+        AND C.DTENTSAI < ${endExpression}
         AND C.CODTIPOPER = 35
         AND C.TIPMOV = 'V'
         ${companyFilter}
@@ -138,13 +138,13 @@ export async function GET(request: Request) {
         `),
         executeQuery(session, `
           WITH DOCUMENTOS AS (
-            SELECT C.NUNOTA, TRUNC(C.DTNEG, 'MM') SALE_MONTH,
+            SELECT C.NUNOTA, TRUNC(C.DTENTSAI, 'MM') SALE_MONTH,
                    NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
               FROM TGFCAB C
               JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
              WHERE ${period}
                AND C.STATUSNOTA = 'L'
-             GROUP BY C.NUNOTA, TRUNC(C.DTNEG, 'MM')
+             GROUP BY C.NUNOTA, TRUNC(C.DTENTSAI, 'MM')
           )
           SELECT TO_CHAR(D.SALE_MONTH, 'MM/YYYY') SALE_MONTH,
                  NVL(SUM(D.ITEM_VALUE), 0) SALES_VALUE,
@@ -219,13 +219,36 @@ export async function GET(request: Request) {
     if (kind === "orders") {
       const dateFrom = safeDate(url.searchParams.get("dateFrom"));
       const dateTo = safeDate(url.searchParams.get("dateTo"));
-      const periodFilter = [
-        dateFrom ? `AND C.DTNEG >= TO_DATE('${dateFrom}', 'DD/MM/YYYY')` : "AND C.DTNEG >= TRUNC(SYSDATE, 'MM')",
-        dateTo ? `AND C.DTNEG < TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1` : "AND C.DTNEG < TRUNC(SYSDATE) + 1",
-      ].join("\n");
+      const startExpression = dateFrom ? `TO_DATE('${dateFrom}', 'DD/MM/YYYY')` : "TRUNC(SYSDATE, 'MM')";
+      const endExpression = dateTo ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1` : "TRUNC(SYSDATE) + 1";
+      const periodFilter = `
+        AND (
+          (EXISTS (
+            SELECT 1 FROM TGFVAR V
+            JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
+            WHERE V.NUNOTAORIG = C.NUNOTA
+              AND F.DTENTSAI >= ${startExpression}
+              AND F.DTENTSAI < ${endExpression}
+          ))
+          OR (
+            NOT EXISTS (
+              SELECT 1 FROM TGFVAR V
+              JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
+              WHERE V.NUNOTAORIG = C.NUNOTA
+            )
+            AND C.DTNEG >= ${startExpression}
+            AND C.DTNEG < ${endExpression}
+          )
+        )
+      `;
       const rows = await executeQuery(session, `
         SELECT * FROM (
-          SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI, C.VLRNOTA,
+          SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI,
+                 (SELECT MAX(F.DTENTSAI)
+                    FROM TGFVAR V
+                    JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
+                   WHERE V.NUNOTAORIG = C.NUNOTA) DTFAT,
+                 C.VLRNOTA,
                  C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC,
                  CASE WHEN EXISTS (
                    SELECT 1 FROM TGFVAR V

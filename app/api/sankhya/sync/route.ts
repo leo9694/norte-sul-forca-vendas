@@ -40,7 +40,12 @@ export async function GET(request: Request) {
          ORDER BY E.CODPARC, E.CODEMP
       `),
       executeQuery(session, `
-        SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI, C.VLRNOTA,
+        SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI,
+               (SELECT MAX(F.DTENTSAI)
+                  FROM TGFVAR V
+                  JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
+                 WHERE V.NUNOTAORIG = C.NUNOTA) DTFAT,
+               C.VLRNOTA,
                C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC,
                CASE WHEN EXISTS (
                  SELECT 1 FROM TGFVAR V

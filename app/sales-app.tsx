@@ -278,9 +278,11 @@ const currentMonthStart = () => {
 
 const displayPeriodDate = (value: string) => value.split("-").reverse().join("/");
 
+const orderPeriodDate = (order: ApiRow) => String(order.FATURADO) === "S" ? order.DTFAT : order.DTNEG;
+
 const filterOrdersByPeriod = (rows: ApiRow[], dateFrom: string, dateTo: string) =>
   rows.filter((order) => {
-    const raw = String(order.DTNEG ?? "");
+    const raw = String(orderPeriodDate(order) ?? "");
     const date = /^\d{8}/.test(raw)
       ? `${raw.slice(4, 8)}-${raw.slice(2, 4)}-${raw.slice(0, 2)}`
       : raw.slice(0, 10);
@@ -1050,8 +1052,6 @@ const sankhyaDate = (value: unknown) => {
   if (/^\d{8}/.test(raw)) return `${raw.slice(0, 2)}/${raw.slice(2, 4)}/${raw.slice(4, 8)}`;
   return raw || "Hoje";
 };
-
-const orderBillingStatus = (value: unknown) => String(value ?? "").trim().toUpperCase() === "S" ? "Pendente" : "Faturado";
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -3083,11 +3083,9 @@ function OrdersScreen({
                   </div>
                 </div>
                 <div className="order-rich-meta">
-                  <span><CalendarDays size={22} /><span><small>Emissão</small>{sankhyaDate(order.DTNEG)}</span></span>
-                  <i />
                   <span><CalendarDays size={22} /><span><small>Data da negociação</small>{sankhyaDate(order.DTNEG)}</span></span>
                   <i />
-                  <span><FileText size={22} /><span><small>Faturamento</small>{orderBillingStatus(order.PENDENTE)}</span></span>
+                  <span><FileText size={22} /><span><small>Data do faturamento</small>{String(order.FATURADO) === "S" ? sankhyaDate(order.DTFAT) : "—"}</span></span>
                 </div>
                 <div className="order-rich-total">{money(Number(order.VLRNOTA || 0))}</div>
               </div>
