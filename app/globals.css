@@ -1156,28 +1156,40 @@ textarea:focus { border-color: var(--green); }
   .order-card { padding: 13px; }
   .order-client strong { font-size: 12px; }
   .order-code { font-size: 9px; }
-  .order-card-rich { grid-template-columns: 42px minmax(0, 1fr); gap: 11px; min-height: 0; padding: 16px 14px; }
-  .order-card-rich .order-icon { width: 42px; height: 42px; }
-  .order-card-rich .order-icon svg { width: 21px; height: 21px; }
-  .order-rich-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-  .order-card-rich .order-client strong { font-size: 13px; }
+  .order-card-rich { position: relative; grid-template-columns: minmax(0, 1fr); gap: 0; min-height: 0; padding: 15px; border-radius: 14px; }
+  .order-card-rich .order-icon, .draft-card .order-icon { display: none; }
+  .order-rich-content { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 8px; }
+  .order-rich-head, .order-rich-actions { display: contents; }
+  .order-card-rich .order-client strong { padding-right: 35px; font-size: 13px; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
   .order-rich-badges { gap: 6px; margin-top: 7px; }
-  .order-card-rich .order-code { padding: 5px 8px; font-size: 11px; }
-  .order-top-badge { padding: 4px 8px; border-width: 1px; font-size: 10px; }
-  .order-card-rich .status { padding: 7px 9px; font-size: 9px; }
-  .order-rich-head > .order-client { grid-column: 1 / -1; }
-  .order-rich-actions { grid-column: 1 / -1; width: 100%; align-items: flex-end; flex-direction: column-reverse; gap: 7px; }
-  .order-document-links { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
-  .order-document-links button { min-width: 0; padding: 0 5px; font-size: 9px; }
-  .order-rich-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 17px; font-size: 12px; }
+  .order-card-rich .order-code { padding: 4px 6px; border-radius: 5px; font-size: 10px; }
+  .order-top-badge { padding: 3px 6px; border-width: 1px; font-size: 9px; }
+  .order-card-rich .status { grid-column: 2; grid-row: 3; align-self: center; padding: 6px 8px; font-size: 10px; }
+  .order-card-rich .status svg { width: 14px; height: 14px; }
+  .order-rich-head > .order-client { grid-column: 1 / -1; grid-row: 1; }
+  .order-card-rich .sent-order-actions { position: absolute; top: 7px; right: 7px; }
+  .orders-page .draft-menu-trigger { width: 40px; height: 40px; }
+  .orders-page .draft-menu { top: 42px; max-width: calc(100vw - 54px); }
+  .order-document-links { grid-column: 1 / -1; grid-row: 4; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
+  .order-document-links button { min-width: 0; min-height: 36px; padding: 0 5px; font-size: 10px; }
+  .order-document-links button svg { width: 15px; height: 15px; }
+  .order-rich-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-column: 1 / -1; grid-row: 2; gap: 8px; margin-top: 0; font-size: 11px; }
   .order-rich-meta > span { min-width: 0; gap: 5px; white-space: normal; }
-  .order-rich-meta svg { width: 16px; }
-  .order-rich-meta small { font-size: 7px; }
+  .order-rich-meta svg { display: none; }
+  .order-rich-meta small { font-size: 7px; letter-spacing: .02em; }
   .order-rich-meta > i { display: none; }
-  .order-rich-total { margin-top: 15px; font-size: 22px; }
+  .order-rich-total { grid-column: 1; grid-row: 3; margin-top: 0; font-size: 21px; align-self: center; }
+  .draft-card { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 15px; }
+  .draft-card .order-client { grid-column: 1 / -1; padding-right: 35px; }
+  .draft-card .order-client strong { white-space: normal; line-height: 1.45; overflow-wrap: anywhere; }
+  .draft-card .order-client small { line-height: 1.5; }
+  .draft-card .order-date { grid-column: 1 / -1; }
+  .draft-card .order-total { grid-column: 1; }
+  .draft-card .status { grid-column: 2; grid-row: 3; min-height: 36px; padding: 8px 10px; font-size: 10px; }
+  .draft-card .draft-actions { top: 7px; right: 7px; }
   .orders-page { padding-bottom: 176px; }
   .status { font-size: 8px; padding: 6px 7px; }
-  .mobile-fab { bottom: 78px; }
+  .mobile-fab { bottom: 78px; padding: 12px 16px; font-size: 12px; }
   .new-header .eyebrow { display: none; }
   .new-header h1 { margin: 0; }
   .stepper::before { left: 11%; right: 11%; }
@@ -1264,19 +1276,16 @@ textarea:focus { border-color: var(--green); }
 
 @media (max-width: 360px) {
   .orders-page { padding-inline: 12px; }
-  .order-card-rich { grid-template-columns: 36px minmax(0, 1fr); gap: 9px; padding: 13px 11px; }
-  .order-card-rich .order-icon { width: 36px; height: 36px; }
-  .order-card-rich .order-icon svg { width: 18px; height: 18px; }
-  .order-card-rich .order-client strong { font-size: 11px; }
+  .order-card-rich { padding: 13px 11px; }
+  .order-card-rich .order-client strong { font-size: 12px; }
   .order-card-rich .status { padding: 6px 7px; font-size: 8px; }
   .order-card-rich .status svg { width: 13px; height: 13px; }
   .order-rich-badges { gap: 4px; }
   .order-card-rich .order-code, .order-top-badge { padding: 4px 6px; font-size: 9px; }
-  .order-rich-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; font-size: 10px; }
-  .order-rich-meta small { font-size: 6px; }
+  .order-rich-meta { gap: 6px; font-size: 10px; }
+  .order-rich-meta small { font-size: 7px; }
   .order-rich-meta svg { width: 14px; height: 14px; }
   .order-rich-total { font-size: 20px; }
-  .draft-card .status { max-width: 72px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
