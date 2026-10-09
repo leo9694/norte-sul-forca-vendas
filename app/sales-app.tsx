@@ -45,9 +45,11 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { readDraftRecords, writeDraftRecord } from "./draft-journal";
 import {
   getOfflineDrafts,
+  getOfflineDraftHistory,
   getLatestOfflineSnapshot,
   getOfflineSnapshot,
   OfflineSnapshot,
@@ -1159,6 +1161,8 @@ export function SalesApp() {
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
+  const draftsRef = useRef<OrderDraft[]>([]);
+  const draftOwnerRef = useRef(0);
   const [toast, setToast] = useState("");
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [canMonitorSales, setCanMonitorSales] = useState(false);
@@ -1396,13 +1400,24 @@ export function SalesApp() {
     }
     let cancelled = false;
     setDraftsReady(false);
+    if (draftOwnerRef.current !== sellerId) {
+      draftsRef.current = [];
+      draftOwnerRef.current = sellerId;
+      setDrafts([]);
+    }
     let stored: OrderDraft[] = [];
+    let removed = new Set<string>();
     try {
       const parsed = JSON.parse(localStorage.getItem(draftKey) || "[]") as OrderDraft[];
       stored = Array.isArray(parsed) ? parsed : [];
     } catch {
       stored = [];
     }
+    try {
+      const journal = readDraftRecords<OrderDraft>(localStorage, sellerId);
+      stored.push(...journal.drafts);
+      removed = journal.removed;
+    } catch { /* IndexedDB continua disponível como fonte alternativa. */ }
     void getOfflineDrafts<OrderDraft>(sellerId)
       .catch(() => [])
       .then((indexedDrafts) => {
@@ -1410,11 +1425,12 @@ export function SalesApp() {
         setDrafts((currentDrafts) => {
           const merged = new Map<string, OrderDraft>();
           [...stored, ...indexedDrafts, ...currentDrafts].forEach((item) => {
-            if (!item?.id) return;
+            if (!item?.id || removed.has(item.id)) return;
             const current = merged.get(item.id);
             if (!current || Number(item.updatedAt || 0) >= Number(current.updatedAt || 0)) merged.set(item.id, item);
           });
           const next = [...merged.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+          draftsRef.current = next;
           try {
             localStorage.setItem(draftKey, JSON.stringify(next));
           } catch {
@@ -1428,50 +1444,81 @@ export function SalesApp() {
     return () => { cancelled = true; };
   }, [draftKey, sellerId]);
 
-  const persistDraftsLocally = (next: OrderDraft[]) => {
+  const persistDraftsLocally = async (next: OrderDraft[]) => {
+    let savedSynchronously = false;
     try {
-      if (draftKey) localStorage.setItem(draftKey, JSON.stringify(next));
+      if (draftKey) {
+        localStorage.setItem(draftKey, JSON.stringify(next));
+        savedSynchronously = true;
+      }
     } catch {
       // O salvamento continua no IndexedDB, que suporta rascunhos maiores.
     }
-    if (sellerId) void saveOfflineDrafts(sellerId, next).catch(() => {
-      setToast("Não foi possível atualizar a cópia offline dos rascunhos.");
-    });
+    try {
+      if (!sellerId) throw new Error("Vendedor indisponível.");
+      await saveOfflineDrafts(sellerId, next);
+    } catch (error) {
+      if (!savedSynchronously) {
+        setToast("Falha ao salvar o pedido neste aparelho. Mantenha esta tela aberta.");
+        throw error;
+      }
+      setToast("Rascunho salvo; a cópia adicional offline está indisponível.");
+    }
   };
 
   const saveDraft = (draft: OrderDraft) => {
-    setDrafts((current) => {
+      const current = draftsRef.current;
+      const previous = current.find(item => item.id === draft.id);
+      draft = { ...draft, updatedAt: Math.max(draft.updatedAt, Number(previous?.updatedAt || 0) + 1) };
+      try { writeDraftRecord(localStorage, sellerId, draft); } catch { /* Tenta os dois armazenamentos abaixo. */ }
       const next = [draft, ...current.filter((item) => item.id !== draft.id)]
         .sort((a, b) => b.updatedAt - a.updatedAt);
-      persistDraftsLocally(next);
-      return next;
-    });
+      draftsRef.current = next;
+      setDrafts(next);
+      return persistDraftsLocally(next);
   };
 
   const removeDraft = (id: string) => {
-    setDrafts((current) => {
+      const current = draftsRef.current;
+      const removed = current.find(draft => draft.id === id);
+      if (removed) {
+        try { writeDraftRecord(localStorage, sellerId, removed, true); } catch { /* Mantém a cópia no backup da nuvem. */ }
+      }
       const next = current.filter((draft) => draft.id !== id);
-      persistDraftsLocally(next);
-      return next;
-    });
+      draftsRef.current = next;
+      setDrafts(next);
+      void persistDraftsLocally(next).catch(() => {});
   };
 
   useEffect(() => {
-    if (!authenticated || !online || !draftsReady || !drafts.length) return;
+    if (!authenticated || !online || !draftsReady) return;
+    const synced = new Set<string>();
+    let running = false;
     const syncDraftBackups = () => {
-      void Promise.all(drafts.map((draft) => api("/api/drafts", {
+      if (running) return;
+      running = true;
+      let pending = draftsRef.current;
+      try {
+        const journal = readDraftRecords<OrderDraft>(localStorage, sellerId);
+        pending = [...pending, ...journal.drafts, ...journal.archived];
+      } catch { /* Sincroniza ao menos os pedidos em memória. */ }
+      const unique = new Map(pending.map(draft => [`${draft.id}:${draft.updatedAt}`, draft]));
+      void Promise.all([...unique.values()].filter(draft => !synced.has(`${draft.id}:${draft.updatedAt}`)).map((draft) => api("/api/drafts", {
         method: "POST",
+        signal: AbortSignal.timeout(20_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ draft }),
-      }).catch(() => null)));
+      }).then(() => { synced.add(`${draft.id}:${draft.updatedAt}`); }).catch(() => {
+        setToast("Backup na nuvem pendente. O pedido continua salvo neste aparelho.");
+      }))).finally(() => { running = false; });
     };
     const initialSync = window.setTimeout(syncDraftBackups, 700);
-    const retrySync = window.setInterval(syncDraftBackups, 30_000);
+    const retrySync = window.setInterval(syncDraftBackups, 5_000);
     return () => {
       window.clearTimeout(initialSync);
       window.clearInterval(retrySync);
     };
-  }, [authenticated, online, draftsReady, drafts]);
+  }, [authenticated, online, draftsReady, sellerId]);
 
   useEffect(() => {
     const notificationTarget = new URLSearchParams(window.location.search).get("open");
@@ -1695,8 +1742,8 @@ export function SalesApp() {
             secureContext={secureContext}
             onInstall={() => void installApplication()}
             onLoad={() => void makeLoad()}
-            onRestoreDraft={(draft) => {
-              saveDraft({ ...draft, updatedAt: Date.now() });
+            onRestoreDraft={async (draft) => {
+              await saveDraft({ ...draft, id: `draft-${crypto.randomUUID()}`, updatedAt: Date.now() });
               setToast("Rascunho restaurado e disponível na aba Pedidos.");
               navigateTo("orders");
             }}
@@ -1704,6 +1751,7 @@ export function SalesApp() {
           />
         ) : (
           <NewOrderV2
+            key={activeDraft?.id ?? `new-${startingPartner?.CODPARC}`}
             partner={startingPartner!}
             draft={activeDraft}
             actingSellerId={orderSellerId ?? sellerId}
@@ -2839,6 +2887,10 @@ function OrdersScreen({
     setSendingDraft(true);
     setDraftSendError("");
     try {
+      await api("/api/drafts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft: draftPendingSend }),
+      });
       const result = await api<{ orderId?: string }>("/api/sankhya/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2857,6 +2909,7 @@ function OrdersScreen({
           })),
         }),
       });
+      if (!result.orderId) throw new Error("Envio sem confirmação do número do pedido. Rascunho preservado; confira no Sankhya antes de reenviar.");
       onDraftSent(result.orderId, draftPendingSend.id);
       setDraftPendingSend(null);
     } catch (err) {
@@ -3568,7 +3621,7 @@ function MoreScreen({
   secureContext: boolean;
   onInstall: () => void;
   onLoad: () => void;
-  onRestoreDraft: (draft: OrderDraft) => void;
+  onRestoreDraft: (draft: OrderDraft) => void | Promise<void>;
   onLogout: () => void;
 }) {
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -3581,13 +3634,24 @@ function MoreScreen({
     : "Nenhuma carga realizada";
 
   const openDraftRestore = async () => {
-    if (!online) return;
     setRestoreOpen(true);
     setLoadingBackups(true);
     setBackupError("");
+    setBackups([]);
     try {
-      const result = await api<{ rows: DraftBackup[] }>("/api/drafts", { cache: "no-store" });
-      setBackups(result.rows);
+      const local = await getOfflineDraftHistory<OrderDraft>(sellerId).catch(() => []);
+      const localRows: DraftBackup[] = local.sort((a, b) => b.updatedAt - a.updatedAt).map(draft => ({
+        draft_id: `local-${draft.id}-${draft.updatedAt}`, seller_id: draft.sellerId || sellerId,
+        seller_name: draft.sellerName || sellerName, partner_id: draft.partner.CODPARC,
+        partner_name: `${draft.partner.NOMEPARC} · Cópia neste aparelho`, item_count: draft.cart.length,
+        total_units: draft.cart.reduce((sum, item) => sum + item.quantity, 0),
+        updated_at: draft.updatedAt, backed_up_at: draft.updatedAt, draft,
+      }));
+      setBackups(localRows);
+      if (online) {
+        const result = await api<{ rows: DraftBackup[] }>("/api/drafts", { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+        setBackups([...result.rows, ...localRows]);
+      }
     } catch (error) {
       setBackupError(error instanceof Error ? error.message : "Não foi possível consultar os backups.");
     } finally {
@@ -3595,9 +3659,13 @@ function MoreScreen({
     }
   };
 
-  const restoreDraft = (backup: DraftBackup) => {
+  const restoreDraft = async (backup: DraftBackup) => {
     setRestoringDraftId(backup.draft_id);
-    onRestoreDraft(backup.draft);
+    try {
+      await onRestoreDraft(backup.draft);
+    } catch {
+      setBackupError("Não foi possível salvar o rascunho restaurado neste aparelho.");
+    } finally { setRestoringDraftId(""); }
   };
 
   return (
@@ -3648,7 +3716,7 @@ function MoreScreen({
           <h2>Restaurar rascunhos</h2>
           <p>Consulte as cópias sincronizadas e devolva um rascunho para a aba Pedidos.</p>
         </div>
-        <button className="primary load-button" onClick={() => void openDraftRestore()} disabled={!online} title={online ? "Consultar rascunhos salvos" : "Conecte-se à internet para restaurar"}>
+        <button className="primary load-button" onClick={() => void openDraftRestore()} title={online ? "Consultar rascunhos salvos" : "Consultar cópias salvas neste aparelho"}>
           <RefreshCw size={19} /> Restaurar
         </button>
       </section>
@@ -3784,7 +3852,7 @@ function NewOrderV2({
   ownSellerId: number;
   offlineData: OfflineSnapshot | null;
   online: boolean;
-  onSaveDraft: (draft: OrderDraft) => void;
+  onSaveDraft: (draft: OrderDraft) => Promise<void>;
   onBack: () => void;
   onSaved: () => void;
   onSent: (id: string | undefined, draftId: string) => void;
@@ -4240,16 +4308,20 @@ function NewOrderV2({
     return () => observer.disconnect();
   }, [hasMoreProducts, loadingProducts, loadingMoreProducts, productPage, products.length, phase, selectedGroups.join(","), brand, search, productHighlight, priceCode, companyCode, actingSellerId, online]);
 
-  useEffect(() => {
-    onSaveDraft(currentDraft());
-  }, [phase, priceCode, negotiation, observation, cart]);
+  useLayoutEffect(() => {
+    void onSaveDraft(currentDraft()).catch(() => {
+      setError("Falha ao salvar o rascunho. Mantenha esta tela aberta e tente salvar novamente.");
+    });
+  }, [phase, companyCode, operation, priceCode, negotiation, observation, cart]);
 
   const setQuantity = (product: Product, change: number) => {
     setCart((current) => {
       const existing = current.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
       const grouping = Math.max(Number(product.AGRUPMIN || 1), 1);
       const available = Math.floor(Number(product.LOT_DISPONIVEL ?? product.DISPONIVEL) / grouping) * grouping;
-      const next = Math.max(0, Math.min(available, (existing?.quantity || 0) + change * grouping));
+      // Reduzir deve retirar somente a quantidade solicitada, mesmo se o estoque mudou.
+      const requested = Math.max(0, (existing?.quantity || 0) + change * grouping);
+      const next = change < 0 ? requested : Math.max(existing?.quantity || 0, Math.min(available, requested));
       if (!next) return current.filter((item) => item !== existing);
       if (existing) return current.map((item) => item === existing ? { ...item, quantity: next } : item);
       return [...current, { ...product, quantity: next }];
@@ -4392,14 +4464,14 @@ function NewOrderV2({
     );
   };
 
-  const closeOrder = () => {
-    onSaveDraft(currentDraft());
-    onBack();
+  const closeOrder = async () => {
+    try { await onSaveDraft(currentDraft()); onBack(); }
+    catch { setError("Não foi possível salvar. O pedido permanece aberto."); }
   };
 
-  const saveAndClose = () => {
-    onSaveDraft(currentDraft());
-    onSaved();
+  const saveAndClose = async () => {
+    try { await onSaveDraft(currentDraft()); onSaved(); }
+    catch { setError("Não foi possível salvar. O pedido permanece aberto."); }
   };
 
   const sendOrder = async () => {
@@ -4411,6 +4483,11 @@ function NewOrderV2({
     setSending(true);
     setError("");
     try {
+      await onSaveDraft(currentDraft());
+      await api("/api/drafts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft: currentDraft() }),
+      });
       const result = await api<{ orderId?: string }>("/api/sankhya/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4434,6 +4511,7 @@ function NewOrderV2({
           })),
         }),
       });
+      if (!result.orderId) throw new Error("Envio sem confirmação do número do pedido. Rascunho preservado; confira no Sankhya antes de reenviar.");
       onSent(result.orderId, draftId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha no envio.");
@@ -4480,6 +4558,7 @@ function NewOrderV2({
               <div className="condition-grid">
                 <label>Empresa
                   <select className="native-select" value={companyCode} onChange={(event) => {
+                    if (cart.length && !window.confirm("Trocar a empresa removerá os produtos deste pedido. Deseja continuar?")) return;
                     setCompanyCode(Number(event.target.value));
                     setPriceCode(0);
                     setBrand("");
@@ -4504,6 +4583,7 @@ function NewOrderV2({
                 </label>
                 <label>Tabela de preço
                   <select className="native-select" value={priceCode} onChange={(event) => {
+                    if (cart.length && !window.confirm("Trocar a tabela de preço removerá os produtos deste pedido. Deseja continuar?")) return;
                     setPriceCode(Number(event.target.value));
                     setBrand("");
                     setSelectedGroups([]);

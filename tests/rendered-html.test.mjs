@@ -131,7 +131,7 @@ test("backs up drafts in the cloud and offers authenticated recovery", async () 
   assert.match(storeSource, /recovery_payload/);
   assert.match(storeSource, /WHEN excluded\.item_count > 0 THEN excluded\.payload/);
   assert.match(appSource, /api\("\/api\/drafts"/);
-  assert.match(appSource, /setInterval\(syncDraftBackups, 30_000\)/);
+  assert.match(appSource, /setInterval\(syncDraftBackups, 5_000\)/);
   assert.match(appSource, /Restaurar rascunhos/);
   assert.match(appSource, /Backup na Nuvem/);
   assert.match(appSource, /Rascunho restaurado e disponível na aba Pedidos/);

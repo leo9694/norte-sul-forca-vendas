@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -25,7 +26,7 @@ function getDatabase() {
   if (database) return database;
   mkdirSync(path.dirname(databasePath), { recursive: true });
   database = new DatabaseSync(databasePath);
-  database.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+  database.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;");
   database.exec(`
     CREATE TABLE IF NOT EXISTS draft_backups (
       owner_user_id INTEGER NOT NULL,
@@ -46,6 +47,23 @@ function getDatabase() {
     );
     CREATE INDEX IF NOT EXISTS draft_backups_owner_updated
       ON draft_backups (owner_user_id, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS draft_backup_versions (
+      owner_user_id INTEGER NOT NULL,
+      draft_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      backed_up_at INTEGER NOT NULL,
+      PRIMARY KEY (owner_user_id, draft_id, updated_at)
+    );
+    CREATE TABLE IF NOT EXISTS draft_backup_history (
+      owner_user_id INTEGER NOT NULL,
+      draft_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      backed_up_at INTEGER NOT NULL,
+      revision_key TEXT NOT NULL,
+      PRIMARY KEY (owner_user_id, draft_id, revision_key)
+    );
   `);
   return database;
 }
@@ -69,7 +87,23 @@ function draftDetails(draft: Record<string, unknown>) {
 export function saveDraftBackup(ownerUserId: number, draft: Record<string, unknown>) {
   const details = draftDetails(draft);
   const backedUpAt = Date.now();
-  getDatabase().prepare(`
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+  const archive = (payload: string, updatedAt: number, savedAt: number) => {
+    db.prepare(`INSERT OR IGNORE INTO draft_backup_history
+      (owner_user_id, draft_id, updated_at, payload, backed_up_at, revision_key)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(ownerUserId, details.draftId, updatedAt, payload, savedAt,
+        createHash("sha256").update(payload).digest("hex"));
+  };
+  const previous = db.prepare(`SELECT payload, updated_at, backed_up_at FROM draft_backups
+    WHERE owner_user_id = ? AND draft_id = ? AND item_count > 0`)
+    .get(ownerUserId, details.draftId) as { payload: string; updated_at: number; backed_up_at: number } | undefined;
+  if (previous) archive(previous.payload, previous.updated_at, previous.backed_up_at);
+  // Preserva também edições atrasadas ou com o mesmo horário de outro aparelho.
+  if (details.itemCount) archive(details.payload, details.updatedAt, backedUpAt);
+  db.prepare(`
     INSERT INTO draft_backups (
       owner_user_id, draft_id, seller_id, seller_name, partner_id, partner_name,
       payload, item_count, total_units, recovery_payload, recovery_item_count,
@@ -104,6 +138,11 @@ export function saveDraftBackup(ownerUserId: number, draft: Record<string, unkno
     details.totalUnits, details.itemCount ? details.payload : null,
     details.itemCount, details.totalUnits, details.updatedAt, backedUpAt,
   );
+  db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function listDraftBackups(ownerUserId: number): StoredDraftBackup[] {
@@ -114,10 +153,9 @@ export function listDraftBackups(ownerUserId: number): StoredDraftBackup[] {
       FROM draft_backups
      WHERE owner_user_id = ?
      ORDER BY updated_at DESC
-     LIMIT 250
   `).all(ownerUserId) as Array<Record<string, string | number | null>>;
 
-  return rows.flatMap((row) => {
+  const latest = rows.flatMap((row) => {
     try {
       const useRecovery = Number(row.item_count) === 0 && Number(row.recovery_item_count) > 0;
       const payload = String(useRecovery ? row.recovery_payload : row.payload);
@@ -137,4 +175,25 @@ export function listDraftBackups(ownerUserId: number): StoredDraftBackup[] {
       return [];
     }
   });
+  const versions = getDatabase().prepare(`
+    SELECT draft_id, updated_at, payload, backed_up_at FROM draft_backup_versions WHERE owner_user_id = ?
+    UNION
+    SELECT draft_id, updated_at, payload, backed_up_at FROM draft_backup_history WHERE owner_user_id = ?
+    ORDER BY updated_at DESC
+  `).all(ownerUserId, ownerUserId) as Array<Record<string, string | number>>;
+  const historical = versions.flatMap((row) => {
+    try {
+      const draft = JSON.parse(String(row.payload)) as Record<string, unknown>;
+      const details = draftDetails(draft);
+      if (latest.some((item) => item.draft_id === details.draftId && JSON.stringify(item.draft) === details.payload)) return [];
+      return [{
+        draft_id: `${details.draftId}-version-${createHash("sha256").update(details.payload).digest("hex").slice(0, 16)}`,
+        seller_id: details.sellerId, seller_name: details.sellerName,
+        partner_id: details.partnerId, partner_name: `${details.partnerName} · Versão anterior`,
+        item_count: details.itemCount, total_units: details.totalUnits,
+        updated_at: details.updatedAt, backed_up_at: Number(row.backed_up_at), draft,
+      }];
+    } catch { return []; }
+  });
+  return [...latest, ...historical];
 }
