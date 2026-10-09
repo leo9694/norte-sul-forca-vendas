@@ -8,10 +8,38 @@ import ts from 'typescript';
 const draft = { id: 'draft-1', updatedAt: 1, sellerId: 123, sellerName: 'Zenaide', partner: { CODPARC: 3923, NOMEPARC: 'Cliente' }, cart: [{ CODPROD: 1, quantity: 2 }] };
 const failure = status => Object.assign(new Error('failure'), { status });
 
+test('silently ignores another seller without requests, retries or local changes', async () => {
+  let time = 0;
+  const sent = [], warnings = [];
+  const queue = createDraftBackupSync({ sessionSellerId: 123, now: () => time,
+    save: async value => sent.push(value), onProblem: message => warnings.push(message) });
+  const foreign = { ...draft, sellerId: 1, sellerName: 'NORTE SUL' };
+  const original = structuredClone(foreign);
+  for (time = 0; time <= 1200000; time += 5000) await queue.sync([foreign]);
+  assert.deepEqual(sent, []);
+  assert.deepEqual(warnings.filter(Boolean), []);
+  assert.deepEqual(foreign, original);
+});
+
+test('backs up current seller and legacy drafts in a mixed queue, not foreign archived drafts', async () => {
+  const sent = [], warnings = [];
+  const queue = createDraftBackupSync({ sessionSellerId: 123, save: async value => sent.push(value.id), onProblem: message => warnings.push(message) });
+  const pending = [draft, { ...draft, id: 'foreign-archived', sellerId: 1 }, { ...draft, id: 'legacy', sellerId: undefined }];
+  const original = structuredClone(pending);
+  await queue.sync(pending);
+  await queue.sync(pending);
+  assert.deepEqual(sent, ['draft-1', 'legacy']);
+  assert.deepEqual(warnings.filter(Boolean), []);
+  assert.deepEqual(pending, original);
+  const ownQueue = createDraftBackupSync({ sessionSellerId: 1, save: async value => sent.push(value.id), onProblem: () => {} });
+  await ownQueue.sync([pending[1]]);
+  assert.equal(sent.at(-1), 'foreign-archived');
+});
+
 test('permission failures do not loop every 5s or block the other drafts', async () => {
   let time = 0;
   const sent = [], warnings = [];
-  const queue = createDraftBackupSync({ now: () => time, onProblem: message => warnings.push(message), save: async value => {
+  const queue = createDraftBackupSync({ sessionSellerId: 123, now: () => time, onProblem: message => warnings.push(message), save: async value => {
     sent.push(value.id);
     if (value.id === draft.id) throw failure(403);
   } });
@@ -31,7 +59,7 @@ test('permission failures do not loop every 5s or block the other drafts', async
 test('temporary failures back off, retry successfully and confirm only successful versions', async () => {
   let time = 0, calls = 0;
   const warnings = [];
-  const queue = createDraftBackupSync({ now: () => time, onProblem: message => warnings.push(message), save: async () => {
+  const queue = createDraftBackupSync({ sessionSellerId: 123, now: () => time, onProblem: message => warnings.push(message), save: async () => {
     if (++calls <= 2) throw failure(500);
   } });
   await queue.sync([draft]);
@@ -55,7 +83,7 @@ test('session mismatch or expiry stops the queue without discarding any draft', 
   for (const status of [401, 409]) {
     let calls = 0;
     const warnings = [];
-    const queue = createDraftBackupSync({ save: async () => { calls++; throw failure(status); }, onProblem: message => warnings.push(message) });
+    const queue = createDraftBackupSync({ sessionSellerId: 123, save: async () => { calls++; throw failure(status); }, onProblem: message => warnings.push(message) });
     await queue.sync([draft, { ...draft, id: 'draft-2' }]);
     await queue.sync([draft]);
     assert.equal(calls, 1);
@@ -66,7 +94,7 @@ test('session mismatch or expiry stops the queue without discarding any draft', 
 test('stopping the queue prevents late failures from updating another session', async () => {
   let reject;
   const warnings = [];
-  const queue = createDraftBackupSync({ save: () => new Promise((_resolve, fail) => { reject = fail; }), onProblem: message => warnings.push(message) });
+  const queue = createDraftBackupSync({ sessionSellerId: 123, save: () => new Promise((_resolve, fail) => { reject = fail; }), onProblem: message => warnings.push(message) });
   const pending = queue.sync([draft]);
   queue.stop();
   reject(failure(403));
@@ -76,7 +104,7 @@ test('stopping the queue prevents late failures from updating another session', 
 
 test('concurrent timer ticks do not send duplicate backups', async () => {
   let calls = 0, finish;
-  const queue = createDraftBackupSync({ save: () => { calls++; return new Promise(resolve => { finish = resolve; }); }, onProblem: () => {} });
+  const queue = createDraftBackupSync({ sessionSellerId: 123, save: () => { calls++; return new Promise(resolve => { finish = resolve; }); }, onProblem: () => {} });
   const pending = queue.sync([draft, draft]);
   await queue.sync([draft]);
   assert.equal(calls, 1);

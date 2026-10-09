@@ -1515,6 +1515,7 @@ export function SalesApp() {
     if (!authenticated || !online || !draftsReady || !userId) return;
     const abort = new AbortController();
     const backup = createDraftBackupSync<OrderDraft>({
+      sessionSellerId: sellerId,
       save: draft => api("/api/drafts", {
         method: "POST",
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(20_000)]),

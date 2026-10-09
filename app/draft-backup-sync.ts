@@ -1,7 +1,8 @@
 type Draft = { id: string; updatedAt: number; sellerId?: number; sellerName?: string };
 
 // Confirma somente respostas de sucesso; falhas nunca removem pedidos locais.
-export function createDraftBackupSync<T extends Draft>({ save, onProblem, now = Date.now }: {
+export function createDraftBackupSync<T extends Draft>({ sessionSellerId, save, onProblem, now = Date.now }: {
+  sessionSellerId: number;
   save: (draft: T) => Promise<unknown>;
   onProblem: (message: string) => void;
   now?: () => number;
@@ -18,7 +19,10 @@ export function createDraftBackupSync<T extends Draft>({ save, onProblem, now = 
     async sync(drafts: T[]) {
       if (running || stopped) return;
       running = true;
-      const unique = new Map(drafts.map(draft => [`${draft.id}:${draft.updatedAt}`, draft]));
+      // Ignora apenas na fila de backup; mantém o pedido e o vendedor locais.
+      // Registros antigos sem vendedor pertencem ao dono da fila local.
+      const eligible = drafts.filter(draft => Number(draft.sellerId ?? sessionSellerId) === sessionSellerId);
+      const unique = new Map(eligible.map(draft => [`${draft.id}:${draft.updatedAt}`, draft]));
       try {
         for (const [key, draft] of unique) {
           if (stopped) break;
