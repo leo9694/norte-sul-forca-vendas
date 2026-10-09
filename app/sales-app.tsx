@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { readDraftRecords, writeDraftRecord } from "./draft-journal";
+import { createDraftBackupSync } from "./draft-backup-sync";
 import {
   getOfflineDrafts,
   getOfflineDraftHistory,
@@ -1163,6 +1164,7 @@ export function SalesApp() {
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
+  const [draftBackupIssue, setDraftBackupIssue] = useState("");
   const draftsRef = useRef<OrderDraft[]>([]);
   const draftOwnerRef = useRef(0);
   const [toast, setToast] = useState("");
@@ -1308,6 +1310,7 @@ export function SalesApp() {
     localStorage.setItem(OFFLINE_SESSION_KEY, "false");
     setAuthenticated(false);
     setOfflineData(null);
+    setDraftBackupIssue("");
     setUserId(0);
     setSellerId(0);
     setSellerName("");
@@ -1509,34 +1512,41 @@ export function SalesApp() {
   };
 
   useEffect(() => {
-    if (!authenticated || !online || !draftsReady) return;
-    const synced = new Set<string>();
-    let running = false;
+    if (!authenticated || !online || !draftsReady || !userId) return;
+    const abort = new AbortController();
+    const backup = createDraftBackupSync<OrderDraft>({
+      save: draft => api("/api/drafts", {
+        method: "POST",
+        signal: AbortSignal.any([abort.signal, AbortSignal.timeout(20_000)]),
+        headers: { "Content-Type": "application/json", "X-FV-User-Id": String(userId), "X-FV-Seller-Id": String(sellerId) },
+        // Rascunhos antigos não tinham vendedor; o dono da fila é o padrão.
+        // Nunca substitui um vendedor que já esteja informado no pedido.
+        body: JSON.stringify({ draft: { ...draft, sellerId: draft.sellerId ?? sellerId } }),
+      }),
+      onProblem: message => {
+        if (abort.signal.aborted) return;
+        setDraftBackupIssue(message);
+        if (message) setToast(message);
+      },
+    });
     const syncDraftBackups = () => {
-      if (running) return;
-      running = true;
+      if (draftOwnerRef.current !== sellerId) return;
       let pending = draftsRef.current;
       try {
         const journal = readDraftRecords<OrderDraft>(localStorage, sellerId);
         pending = [...pending, ...journal.drafts, ...journal.archived];
       } catch { /* Sincroniza ao menos os pedidos em memória. */ }
-      const unique = new Map(pending.map(draft => [`${draft.id}:${draft.updatedAt}`, draft]));
-      void Promise.all([...unique.values()].filter(draft => !synced.has(`${draft.id}:${draft.updatedAt}`)).map((draft) => api("/api/drafts", {
-        method: "POST",
-        signal: AbortSignal.timeout(20_000),
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draft }),
-      }).then(() => { synced.add(`${draft.id}:${draft.updatedAt}`); }).catch(() => {
-        setToast("Backup na nuvem pendente. O pedido continua salvo neste aparelho.");
-      }))).finally(() => { running = false; });
+      void backup.sync(pending);
     };
     const initialSync = window.setTimeout(syncDraftBackups, 700);
     const retrySync = window.setInterval(syncDraftBackups, 5_000);
     return () => {
+      backup.stop();
+      abort.abort();
       window.clearTimeout(initialSync);
       window.clearInterval(retrySync);
     };
-  }, [authenticated, online, draftsReady, sellerId]);
+  }, [authenticated, online, draftsReady, sellerId, userId]);
 
   useEffect(() => {
     const notificationTarget = new URLSearchParams(window.location.search).get("open");
@@ -1647,6 +1657,7 @@ export function SalesApp() {
       localStorage.setItem(OFFLINE_SESSION_KEY, "false");
       setAuthenticated(false);
       setOfflineData(null);
+      setDraftBackupIssue("");
       setUnreadMessages(0);
       setCanMonitorSales(false);
       setScreen("home");
@@ -1672,6 +1683,7 @@ export function SalesApp() {
       <LoginScreen
         onLogin={(loginData) => {
           setOfflineData(null);
+          setDraftBackupIssue("");
           setLoadError("");
           setLoadStage("Preparando a primeira carga...");
           setUser(loginData.user);
@@ -1785,6 +1797,7 @@ export function SalesApp() {
             sellerName={sellerName}
             online={online}
             syncing={syncing}
+            draftBackupIssue={draftBackupIssue}
             snapshot={offlineData}
             canInstall={Boolean(installPrompt)}
             installed={installed}
@@ -3649,6 +3662,7 @@ function MoreScreen({
   sellerName,
   online,
   syncing,
+  draftBackupIssue,
   snapshot,
   canInstall,
   installed,
@@ -3664,6 +3678,7 @@ function MoreScreen({
   sellerName: string;
   online: boolean;
   syncing: boolean;
+  draftBackupIssue: string;
   snapshot: OfflineSnapshot | null;
   canInstall: boolean;
   installed: boolean;
@@ -3759,6 +3774,7 @@ function MoreScreen({
         </button>
       </section>
 
+      {draftBackupIssue && <div className="global-error" role="status">{draftBackupIssue}</div>}
       <section className="restore-card">
         <div className="load-card-icon"><FileText size={25} /></div>
         <div className="load-card-copy">

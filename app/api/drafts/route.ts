@@ -1,5 +1,6 @@
 import { listDraftBackups, saveDraftBackup } from "../../../db/drafts";
 import { canAnalyzeOtherSellers, requireSession } from "../_lib/sankhya";
+import { draftSessionConflict } from "../_lib/draft-session";
 
 function validDraft(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object") return false;
@@ -28,6 +29,8 @@ function validDraft(value: unknown): value is Record<string, unknown> {
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
+    const conflict = draftSessionConflict(request, session);
+    if (conflict) return conflict;
     return Response.json({ rows: listDraftBackups(session.userId) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Não foi possível consultar os rascunhos salvos.";
@@ -41,6 +44,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const session = await requireSession(request);
+    const conflict = draftSessionConflict(request, session);
+    if (conflict) return conflict;
     const body = await request.json() as { draft?: unknown };
     if (!validDraft(body.draft)) {
       return Response.json({ error: "Rascunho inválido." }, { status: 400 });
