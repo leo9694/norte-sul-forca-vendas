@@ -48,6 +48,7 @@ import {
 import { FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { readDraftRecords, writeDraftRecord } from "./draft-journal";
 import { createDraftBackupSync } from "./draft-backup-sync";
+import { refreshDraftPrices } from "./draft-prices";
 import {
   getOfflineDrafts,
   getOfflineDraftHistory,
@@ -4204,6 +4205,11 @@ function NewOrderV2({
     });
     return [...consolidated.values()];
   };
+
+  useEffect(() => {
+    if (!offlineData || offlineData.seller.sellerId !== actingSellerId || !companyCode || !priceCode) return;
+    setCart(current => refreshDraftPrices(current, offlineData.products, companyCode, priceCode));
+  }, [offlineData, companyCode, priceCode, actingSellerId]);
 
   const currentDraft = (): OrderDraft => ({
     id: draftId,

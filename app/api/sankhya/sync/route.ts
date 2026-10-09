@@ -129,6 +129,7 @@ export async function GET(request: Request) {
             FROM TGFEXC X
             JOIN TGFTAB T ON T.NUTAB = X.NUTAB
             JOIN HERANCA_PRECOS H ON H.CODTAB_FONTE = T.CODTAB AND H.CICLO = 'N'
+                                 AND (T.NUTAB = H.NUTAB_FONTE OR H.ACEITA_HISTORICO = 'S')
             JOIN TABELAS TB ON TB.CODTAB = H.CODTAB
            WHERE T.DTVIGOR <= TRUNC(SYSDATE)
         ),

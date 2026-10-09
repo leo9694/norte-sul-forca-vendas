@@ -80,7 +80,8 @@ for (const code of [4,8,67]) {
   assert.ok(catalog.length);
   const eligible = await query(interpolate(groupSql,values) + ' SELECT COUNT(*) TOTAL FROM ITENS WHERE RN=1 AND VLRVENDA>0');
   assert.ok(Number(eligible[0].TOTAL)>0);
-  const offline = await query(interpolate(offlineSql,{priceInheritanceCtes,session:{sellerId:Number(client.CODVEND)}}));
+  const customerTablesSql = interpolate(syncSource.match(/const customerTablesSql = `([\s\S]*?)`;/)[1], {session:{sellerId:Number(client.CODVEND)}});
+  const offline = await query(interpolate(offlineSql,{priceInheritanceCtes,customerTablesSql,session:{sellerId:Number(client.CODVEND)}}));
   const offlineByLot = new Map(offline.filter(row => Number(row.CODEMP)===values.company && Number(row.CODTAB)===code)
     .map(row => [`${row.CODPROD}|${row.CODLOCAL}|${String(row.CONTROLE??'').trim()}`,row]));
   for (const product of catalog) {
