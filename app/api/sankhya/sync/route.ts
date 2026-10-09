@@ -1,14 +1,32 @@
-import { executeQuery, requireSession } from "../../_lib/sankhya";
+import { executeQuery as executePage, requireSession, type SankhyaSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
+import { readAllQueryRows } from "../../_lib/query-pagination";
+
+const executeQuery = (session: SankhyaSession, sql: string) =>
+  readAllQueryRows(page => executePage(session, page), sql);
 
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
+    // Considera os vínculos de todas as empresas de cada cliente, não só a
+    // empresa padrão, para manter disponível a venda em outra empresa offline.
+    const customerTablesSql = `
+      SELECT DISTINCT E.CODEMP, N.CODTAB, N.NOMETAB
+        FROM TGFPAR P
+        JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
+        JOIN TGFNTA N ON N.CODTAB = E.CODTAB
+       WHERE P.CLIENTE = 'S'
+         AND P.ATIVO = 'S'
+         AND P.CODVEND = ${session.sellerId}
+         AND N.ATIVO = 'S'
+         AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
+    `;
+    const tables = await executeQuery(session, `${customerTablesSql} ORDER BY CODEMP, NOMETAB, CODTAB`);
 
-    const [clients, partnerCompanies, orders, tables, negotiations, operations, products, productGroups] = await Promise.all([
+    const [clients, partnerCompanies, orders, negotiations, operations, products, productGroups] = await Promise.all([
       executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
-               E.NOMEEND ENDERECO, P.NUMEND, P.COMPLEMENTO, B.NOMEBAI BAIRRO, P.CEP,
+               EN.NOMEEND ENDERECO, P.NUMEND, P.COMPLEMENTO, B.NOMEBAI BAIRRO, P.CEP,
                P.TELEFONE, P.EMAIL, P.IDENTINSCESTAD INSCESTAD, CI.NOMECID, U.UF, P.CODVEND,
                E.CODEMP, E.GRUPOICMS, E.CODTAB,
                NVL((SELECT MAX(C.CODTIPVENDA) KEEP (DENSE_RANK LAST ORDER BY C.NUNOTA)
@@ -17,7 +35,7 @@ export async function GET(request: Request) {
                        AND C.CODTIPOPER = 5
                        AND C.CODVEND = ${session.sellerId}), 53) CODTIPVENDA
           FROM TGFPAR P
-          LEFT JOIN TSIEND E ON E.CODEND = P.CODEND
+          LEFT JOIN TSIEND EN ON EN.CODEND = P.CODEND
           LEFT JOIN TSIBAI B ON B.CODBAI = P.CODBAI
           LEFT JOIN TSICID CI ON CI.CODCID = P.CODCID
           LEFT JOIN TSIUFS U ON U.CODUF = CI.UF
@@ -29,7 +47,7 @@ export async function GET(request: Request) {
          WHERE P.CLIENTE = 'S'
            AND P.ATIVO = 'S'
            AND P.CODVEND = ${session.sellerId}
-         ORDER BY P.NOMEPARC
+         ORDER BY P.NOMEPARC, P.CODPARC
       `),
       executeQuery(session, `
         SELECT E.CODPARC, E.CODEMP,
@@ -65,19 +83,6 @@ export async function GET(request: Request) {
          ORDER BY C.NUNOTA DESC
       `),
       executeQuery(session, `
-        SELECT DISTINCT E.CODEMP, N.CODTAB, N.NOMETAB
-          FROM TGFPAR P
-          JOIN TGFPAEM E ON E.CODPARC = P.CODPARC
-          JOIN TGFNTA N ON N.CODTAB = E.CODTAB
-         WHERE P.CLIENTE = 'S'
-           AND P.ATIVO = 'S'
-           AND P.CODVEND = ${session.sellerId}
-           AND E.CODTAB IS NOT NULL
-           AND N.ATIVO = 'S'
-           AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
-         ORDER BY E.CODEMP, N.NOMETAB
-      `),
-      executeQuery(session, `
         SELECT V.CODTIPVENDA, V.DESCRTIPVENDA
           FROM TGFTPV V
          WHERE V.ATIVO = 'S'
@@ -101,18 +106,9 @@ export async function GET(request: Request) {
            )
          ORDER BY O.CODTIPOPER
       `),
-      executeQuery(session, `
+      tables.length ? executeQuery(session, `
         WITH ${priceInheritanceCtes()}, TABELAS AS (
-          SELECT DISTINCT E.CODEMP, E.CODTAB
-            FROM TGFPAR CL
-            JOIN TGFPAEM E ON E.CODPARC = CL.CODPARC
-            JOIN TGFNTA N ON N.CODTAB = E.CODTAB
-           WHERE CL.CLIENTE = 'S'
-             AND CL.ATIVO = 'S'
-             AND CL.CODVEND = ${session.sellerId}
-             AND E.CODTAB IS NOT NULL
-             AND N.ATIVO = 'S'
-             AND NVL(N.AD_MOBILIDADE, 'N') = 'S'
+          SELECT DISTINCT CODEMP, CODTAB FROM (${customerTablesSql})
         ),
         ESTOQUE AS (
           SELECT CODEMP, CODPROD, CODLOCAL, CONTROLE,
@@ -167,13 +163,13 @@ export async function GET(request: Request) {
           FROM ITENS
          WHERE RN = 1
            AND VLRVENDA > 0
-         ORDER BY CODEMP, CODTAB, DESCRGRUPOPROD, DESCRPROD, DISPONIVEL DESC
-      `),
+         ORDER BY CODEMP, CODTAB, DESCRGRUPOPROD, DESCRPROD, CODPROD, CODLOCAL, CONTROLE
+      `) : [],
       executeQuery(session, `
         SELECT CODGRUPOPROD, DESCRGRUPOPROD, CODGRUPAI, GRAU, ANALITICO
           FROM TGFGRU
          WHERE ATIVO = 'S'
-         ORDER BY GRAU, DESCRGRUPOPROD
+         ORDER BY GRAU, DESCRGRUPOPROD, CODGRUPOPROD
       `),
     ]);
 

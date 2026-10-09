@@ -1148,6 +1148,8 @@ export function SalesApp() {
   const [offlineData, setOfflineData] = useState<OfflineSnapshot | null>(null);
   const [online, setOnline] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [loadStage, setLoadStage] = useState("Preparando a primeira carga...");
+  const [loadError, setLoadError] = useState("");
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [iosDevice, setIosDevice] = useState(false);
@@ -1305,6 +1307,7 @@ export function SalesApp() {
   const returnToLogin = () => {
     localStorage.setItem(OFFLINE_SESSION_KEY, "false");
     setAuthenticated(false);
+    setOfflineData(null);
     setUserId(0);
     setSellerId(0);
     setSellerName("");
@@ -1318,12 +1321,16 @@ export function SalesApp() {
 
   const makeLoad = async (showSuccess = true) => {
     if (!navigator.onLine) {
+      setLoadError("Conecte-se à internet para concluir a primeira carga.");
       setToast("Conecte-se à internet para fazer uma nova carga.");
       return null;
     }
     setSyncing(true);
+    setLoadError("");
+    setLoadStage("Consultando clientes, tabelas, preços e estoque no Sankhya...");
     try {
       const snapshot = await api<OfflineSnapshot>("/api/sankhya/sync");
+      setLoadStage("Salvando os dados neste aparelho para uso offline...");
       await saveOfflineSnapshot(snapshot);
       localStorage.setItem(OFFLINE_SESSION_KEY, "true");
       applySnapshot(snapshot);
@@ -1336,11 +1343,22 @@ export function SalesApp() {
         returnToLogin();
         return null;
       }
-      setToast(error instanceof Error ? error.message : "Não foi possível fazer a carga.");
+      const message = error instanceof Error ? error.message : "Não foi possível fazer a carga.";
+      setLoadError(message);
+      setToast(message);
       return null;
     } finally {
       setSyncing(false);
     }
+  };
+
+  const loadCachedData = async (requestedSellerId: number) => {
+    const cached = await getOfflineSnapshot(requestedSellerId).catch(() => null);
+    if (!cached) return;
+    // Restaura somente os dados: a identidade é a da sessão recém-validada.
+    setOfflineData(cached);
+    setClients(cached.clients as Client[]);
+    setOrders(filterOrdersByPeriod(cached.orders, currentMonthStart(), inputDate(new Date())));
   };
 
   const installApplication = async () => {
@@ -1588,6 +1606,7 @@ export function SalesApp() {
         setUserId(Number(result.userId || 0));
         setSellerId(Number(result.sellerId || 0));
         setSellerName(result.sellerName || result.user || "");
+        await loadCachedData(Number(result.sellerId || 0));
         setAuthenticated(true);
         localStorage.setItem(OFFLINE_SESSION_KEY, "true");
         setCheckingSession(false);
@@ -1627,6 +1646,7 @@ export function SalesApp() {
       if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
       localStorage.setItem(OFFLINE_SESSION_KEY, "false");
       setAuthenticated(false);
+      setOfflineData(null);
       setUnreadMessages(0);
       setCanMonitorSales(false);
       setScreen("home");
@@ -1651,6 +1671,9 @@ export function SalesApp() {
     return (
       <LoginScreen
         onLogin={(loginData) => {
+          setOfflineData(null);
+          setLoadError("");
+          setLoadStage("Preparando a primeira carga...");
           setUser(loginData.user);
           setUserId(loginData.userId);
           setSellerId(loginData.sellerId);
@@ -1659,9 +1682,36 @@ export function SalesApp() {
           setScreen("home");
           replaceHistoryView("home");
           localStorage.setItem(OFFLINE_SESSION_KEY, "true");
-          void makeLoad();
+          void loadCachedData(loginData.sellerId).then(() => makeLoad());
         }}
       />
+    );
+  }
+
+  if (!offlineData || offlineData.seller.sellerId !== sellerId) {
+    return (
+      <main className="app-loader first-load-screen">
+        <section className="first-load-card" aria-labelledby="first-load-title" aria-busy={syncing}>
+          <BrandMark />
+          <div className="first-load-icon"><Database size={28} /></div>
+          <h1 id="first-load-title">Preparando seu aplicativo</h1>
+          <p>Estamos fazendo a primeira carga de dados. O app será liberado assim que tudo estiver salvo neste aparelho.</p>
+          {!loadError ? (
+            <div role="status" aria-live="polite">
+              <progress className="first-load-progress" aria-label="Primeira carga em andamento" />
+              <p className="first-load-stage">{loadStage}</p>
+              <small>Aguarde e mantenha esta página aberta. Isso pode levar alguns minutos.</small>
+            </div>
+          ) : (
+            <div className="first-load-error" role="alert">
+              <p>{loadError}</p>
+              <button className="primary" disabled={!online || syncing} onClick={() => void makeLoad()}>Tentar novamente</button>
+              {!online && <small>Conecte-se à internet para continuar.</small>}
+              <button className="secondary" disabled={syncing} onClick={() => void logout()}>Voltar ao login</button>
+            </div>
+          )}
+        </section>
+      </main>
     );
   }
 
@@ -3092,7 +3142,7 @@ function OrdersScreen({
               <div className="order-date"><small>{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</small></div>
               <div className="order-total"><strong>{money(cartTotal(draft.cart))}</strong></div>
               <button className="status draft" onClick={() => onResume({ ...draft, sellerName: sellerNameForDraft(draft) })}><FileText size={15} /> Continuar</button>
-              <div className="draft-actions" onClick={(event) => event.stopPropagation()}>
+              <div className={`draft-actions${draftMenuId === draft.id ? " menu-open" : ""}`} onClick={(event) => event.stopPropagation()}>
                 <button className="draft-menu-trigger" aria-label="Mais opções do rascunho" aria-expanded={draftMenuId === draft.id} onClick={() => setDraftMenuId((current) => current === draft.id ? null : draft.id)}><MoreVertical size={20} /></button>
                 {draftMenuId === draft.id && (
                   <div className="draft-menu" role="menu">
@@ -3132,7 +3182,7 @@ function OrdersScreen({
                     <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
                       {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
                     </span>
-                    <div className="draft-actions sent-order-actions" onClick={(event) => event.stopPropagation()}>
+                    <div className={`draft-actions sent-order-actions${draftMenuId === `pedido-${order.NUNOTA}` ? " menu-open" : ""}`} onClick={(event) => event.stopPropagation()}>
                       <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}><MoreVertical size={20} /></button>
                       {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order)}><FileText size={14} /> Relatório do pedido</button>

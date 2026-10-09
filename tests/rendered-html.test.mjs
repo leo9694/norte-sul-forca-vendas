@@ -79,6 +79,17 @@ test("ships installable PWA files with the current cache policy", async () => {
   assert.match(serviceWorker, /showNotification/);
 });
 
+test("raises an open order menu above the triggers of adjacent cards", async () => {
+  const [css, source] = await Promise.all([
+    readFile(path.join(projectRoot, "app", "globals.css"), "utf8"),
+    readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),
+  ]);
+  assert.match(css, /\.draft-actions\s*\{[^}]*z-index:\s*2/);
+  assert.match(css, /\.draft-actions\.menu-open\s*\{[^}]*z-index:\s*3/);
+  assert.match(source, /draft-actions\$\{draftMenuId === draft\.id \? " menu-open"/);
+  assert.match(source, /draft-actions sent-order-actions\$\{draftMenuId === `pedido-\$\{order\.NUNOTA\}` \? " menu-open"/);
+});
+
 test("keeps a seller-scoped offline load and manual refresh screen", async () => {
   const [appSource, storeSource, syncSource] = await Promise.all([
     readFile(path.join(projectRoot, "app", "sales-app.tsx"), "utf8"),

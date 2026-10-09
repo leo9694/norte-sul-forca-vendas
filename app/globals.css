@@ -38,6 +38,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   gap: 18px;
   color: var(--muted);
 }
+.first-load-screen { padding: 24px; min-height: 100dvh; }
+.first-load-card { width: min(100%, 480px); padding: 32px; border: 1px solid var(--line); border-radius: 24px; background: white; box-shadow: var(--shadow); text-align: center; }
+.first-load-card .brand { justify-content: center; text-align: left; }
+.first-load-icon { display: grid; place-items: center; width: 64px; height: 64px; margin: 28px auto 20px; border-radius: 20px; color: var(--green); background: var(--green-soft); }
+.first-load-card h1 { margin: 0 0 12px; font-size: 24px; color: var(--ink); }
+.first-load-card p { font-size: 14px; line-height: 1.6; }
+.first-load-card small { display: block; font-size: 12px; line-height: 1.6; }
+.first-load-progress { display: block; width: 100%; height: 8px; margin: 24px 0 16px; border: 0; border-radius: 8px; overflow: hidden; appearance: none; background: var(--green-soft); }
+.first-load-progress:indeterminate { background: linear-gradient(90deg, var(--green-soft) 0%, var(--green) 50%, var(--green-soft) 100%); background-size: 200% 100%; animation: first-load 1.8s linear infinite; }
+.first-load-progress::-webkit-progress-bar { background: transparent; }
+.first-load-progress:indeterminate::-moz-progress-bar { background: transparent; }
+.first-load-stage { color: var(--green-dark); font-weight: 700; }
+.first-load-error { display: grid; gap: 12px; margin-top: 20px; }
+.first-load-error p { color: #a12c2c; overflow-wrap: anywhere; }
+@keyframes first-load { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .first-load-progress:indeterminate { animation: none; } }
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand-mark {
   width: 46px; height: 46px; display: grid; place-items: center;
@@ -265,6 +281,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .draft-card { position: relative; width: 100%; text-align: left; color: var(--ink); }
 .draft-card .status { border: 0; cursor: pointer; }
 .draft-actions { position: absolute; top: 9px; right: 10px; z-index: 2; }
+.draft-actions.menu-open { z-index: 3; }
 .sent-order-actions { position: relative; top: auto; right: auto; flex-shrink: 0; }
 .sent-order-actions .draft-menu, .draft-card .draft-menu { width: 230px; max-width: calc(100vw - 40px); }
 .sent-order-actions .draft-menu small { display: block; padding: 8px; color: var(--muted); font-size: 10px; }
