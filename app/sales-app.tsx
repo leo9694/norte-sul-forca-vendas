@@ -4105,7 +4105,8 @@ function NewOrderV2({
   };
 
   const offlineProductMatchesCompany = (item: ApiRow) =>
-    item.CODEMP == null ? companyCode === 1 : Number(item.CODEMP) === companyCode;
+    Number(item.CODLOCAL) === 1010101
+    && (item.CODEMP == null ? companyCode === 1 : Number(item.CODEMP) === companyCode);
 
   const offlineGroups = () => {
     if (!offlineData) return [] as ProductGroup[];

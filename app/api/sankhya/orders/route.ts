@@ -51,6 +51,9 @@ export async function POST(request: Request) {
     if (items.some((item) => !Number.isInteger(item.product) || item.quantity <= 0)) {
       throw new Error("Há itens com quantidade inválida.");
     }
+    if (items.some((item) => Number(item.location) !== 1010101)) {
+      throw new Error("O pedido permite somente itens do local de estoque 1010101. Revise os itens de outros locais; o rascunho foi mantido.");
+    }
     if (items.some((item) => {
       const adjustment = Number(item.adjustmentPercent || 0);
       return !Number.isFinite(adjustment) || adjustment <= -100 || adjustment > 999.99;
@@ -122,6 +125,7 @@ export async function POST(request: Request) {
                SUM(ESTOQUE - RESERVADO) DISPONIVEL
           FROM TGFEST
          WHERE CODEMP = ${company}
+           AND CODLOCAL = 1010101
            AND ATIVO = 'S'
            AND CODPROD IN (${productCodes})
          GROUP BY CODPROD, CODLOCAL, CONTROLE

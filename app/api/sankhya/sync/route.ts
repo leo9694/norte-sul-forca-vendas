@@ -117,6 +117,7 @@ export async function GET(request: Request) {
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
            WHERE CODEMP IN (SELECT CODEMP FROM TABELAS)
+             AND CODLOCAL = 1010101
              AND ATIVO = 'S'
            GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
            HAVING SUM(ESTOQUE - RESERVADO) > 0

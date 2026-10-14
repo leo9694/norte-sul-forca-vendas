@@ -703,6 +703,7 @@ export async function GET(request: Request) {
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
            WHERE CODEMP = ${company} AND ATIVO = 'S'
+             AND CODLOCAL = 1010101
            GROUP BY CODPROD, CODLOCAL, CONTROLE
           HAVING SUM(ESTOQUE - RESERVADO) > 0
         ),
@@ -799,6 +800,7 @@ export async function GET(request: Request) {
           JOIN TGFEST E ON E.CODPROD = P.CODPROD
          WHERE P.CODPROD = ${product}
            AND E.CODEMP = ${company}
+           AND E.CODLOCAL = 1010101
            AND E.ATIVO = 'S'
            AND EXISTS (
              SELECT 1
@@ -879,6 +881,7 @@ export async function GET(request: Request) {
                  SUM(ESTOQUE - RESERVADO) DISPONIVEL
             FROM TGFEST
            WHERE CODEMP = ${company} AND ATIVO = 'S'
+             AND CODLOCAL = 1010101
            GROUP BY CODEMP, CODPROD, CODLOCAL, CONTROLE
           HAVING SUM(ESTOQUE - RESERVADO) > 0
         ),
