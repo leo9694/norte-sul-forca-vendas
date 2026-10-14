@@ -1,5 +1,6 @@
 import { callSankhya, canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
+import { allocateOrderLots } from "../../../stock-lots";
 
 type OrderItem = {
   product: number;
@@ -122,6 +123,7 @@ export async function POST(request: Request) {
     const validRows = await executeQuery(session, `
       WITH ${priceInheritanceCtes()}, ESTOQUE AS (
         SELECT CODPROD, CODLOCAL, CONTROLE,
+               MAX(DTVAL) DTVAL,
                SUM(ESTOQUE - RESERVADO) DISPONIVEL
           FROM TGFEST
          WHERE CODEMP = ${company}
@@ -145,7 +147,7 @@ export async function POST(request: Request) {
            AND X.CODPROD IN (${productCodes})
       ),
       ITENS AS (
-        SELECT P.CODPROD, P.AGRUPMIN, E.CODLOCAL, E.CONTROLE, E.DISPONIVEL,
+        SELECT P.CODPROD, P.AGRUPMIN, E.CODLOCAL, E.CONTROLE, E.DISPONIVEL, E.DTVAL,
                PR.NUTAB, PR.VLRVENDA,
                ROW_NUMBER() OVER (
                  PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
@@ -161,34 +163,12 @@ export async function POST(request: Request) {
          WHERE P.ATIVO = 'S'
            AND P.AD_MOBILIDADE = 'S'
       )
-      SELECT CODPROD, AGRUPMIN, CODLOCAL, CONTROLE, DISPONIVEL, NUTAB, VLRVENDA
+      SELECT CODPROD, AGRUPMIN, CODLOCAL, CONTROLE, DISPONIVEL, DTVAL, NUTAB, VLRVENDA
         FROM ITENS
        WHERE RN = 1
          AND VLRVENDA > 0
     `);
-    const itemKey = (product: number, location: number, control: unknown) =>
-      `${product}|${location}|${String(control ?? "").trim()}`;
-    const validMap = new Map(validRows.map((row) => [
-      itemKey(Number(row.CODPROD), Number(row.CODLOCAL), row.CONTROLE),
-      row,
-    ]));
-    for (const item of items) {
-      const current = validMap.get(itemKey(item.product, item.location, item.control));
-      if (!current) throw new Error(`Produto ${item.product} indisponível ou não habilitado para mobilidade.`);
-      if (item.quantity > Number(current.DISPONIVEL)) {
-        throw new Error(`Estoque insuficiente para o produto ${item.product}.`);
-      }
-      const grouping = Math.max(Number(current.AGRUPMIN || 1), 1);
-      if (Math.abs(item.quantity / grouping - Math.round(item.quantity / grouping)) > 0.0001) {
-        throw new Error(`O produto ${item.product} deve ser negociado em múltiplos de ${grouping}.`);
-      }
-      if (item.priceTable !== Number(current.NUTAB)) {
-        throw new Error(`A tabela do produto ${item.product} mudou. Atualize o pedido.`);
-      }
-      if (Math.abs(item.unitPrice - Number(current.VLRVENDA)) > 0.005) {
-        throw new Error(`O preço do produto ${item.product} mudou. Atualize o pedido.`);
-      }
-    }
+    const allocatedItems = allocateOrderLots(items, validRows);
 
     const today = new Intl.DateTimeFormat("pt-BR", {
       timeZone: "America/Cuiaba",
@@ -222,7 +202,7 @@ export async function POST(request: Request) {
         },
         itens: {
           INFORMARPRECO: "True",
-          item: items.map((item) => ({
+          item: allocatedItems.map((item) => ({
             NUNOTA: {},
             CODPROD: { $: String(item.product) },
             QTDNEG: { $: String(item.quantity) },

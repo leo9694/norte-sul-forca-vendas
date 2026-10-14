@@ -49,6 +49,7 @@ import { FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef,
 import { readDraftRecords, writeDraftRecord } from "./draft-journal";
 import { createDraftBackupSync } from "./draft-backup-sync";
 import { refreshDraftPrices } from "./draft-prices";
+import { compareLotExpiry } from "./stock-lots";
 import {
   getOfflineDrafts,
   getOfflineDraftHistory,
@@ -4200,7 +4201,7 @@ function NewOrderV2({
         return;
       }
       const total = Number(current.DISPONIVEL || 0) + available;
-      consolidated.set(Number(product.CODPROD), available > Number(current.LOT_DISPONIVEL || 0)
+      consolidated.set(Number(product.CODPROD), compareLotExpiry(product, current) < 0
         ? { ...product, DISPONIVEL: total, LOT_DISPONIVEL: available }
         : { ...current, DISPONIVEL: total });
     });
@@ -4392,7 +4393,8 @@ function NewOrderV2({
     setCart((current) => {
       const existing = current.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
       const grouping = Math.max(Number(product.AGRUPMIN || 1), 1);
-      const available = Math.floor(Number(product.LOT_DISPONIVEL ?? product.DISPONIVEL) / grouping) * grouping;
+      const otherQuantity = current.filter(item => item.CODPROD === product.CODPROD && item !== existing).reduce((sum, item) => sum + item.quantity, 0);
+      const available = Math.max(0, Math.floor((Number(product.DISPONIVEL) - otherQuantity) / grouping) * grouping);
       // Reduzir deve retirar somente a quantidade solicitada, mesmo se o estoque mudou.
       const requested = Math.max(0, (existing?.quantity || 0) + change * grouping);
       const next = change < 0 ? requested : Math.max(existing?.quantity || 0, Math.min(available, requested));

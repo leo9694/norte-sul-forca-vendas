@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { priceInheritanceCtes } from '../app/api/_lib/price-inheritance.ts';
+import { allocateOrderLots } from '../app/stock-lots.ts';
 
 test('online catalog, groups and lots only query stock from location 1010101', async () => {
   const source = await readFile(new URL('../app/api/sankhya/data/route.ts', import.meta.url), 'utf8');
@@ -32,7 +33,7 @@ test('older offline loads cannot display other locations or mix companies', asyn
   assert.equal(matches(8)({ CODEMP: 8 }), false);
 });
 
-async function orderApi(location, quantity = 1) {
+async function orderApi(location, quantity = 1, stockRows = null) {
   const source = await readFile(new URL('../app/api/sankhya/orders/route.ts', import.meta.url), 'utf8');
   const js = ts.transpileModule(source.replace(/^import[^\n]+\n/gm, ''), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -40,16 +41,16 @@ async function orderApi(location, quantity = 1) {
   const queries = [], sent = [];
   const executeQuery = async (_session, sql) => {
     queries.push(sql);
-    if (sql.includes('WITH ')) return [{ CODPROD: 3799, AGRUPMIN: 1, CODLOCAL: 1010101, CONTROLE: '50355', DISPONIVEL: 3, NUTAB: 2602, VLRVENDA: 13.8 }];
+    if (sql.includes('WITH ')) return stockRows ?? [{ CODPROD: 3799, AGRUPMIN: 1, CODLOCAL: 1010101, CONTROLE: '50355', DISPONIVEL: 3, NUTAB: 2602, VLRVENDA: 13.8 }];
     if (sql.includes('FROM TGFPAR P')) return [{ GRUPOICMS: 1 }];
     if (sql.includes('FROM TGFTOP')) return [{ DHALTER: '14102026 00:00:00' }];
     if (sql.includes('FROM TGFTPV')) return [{ DHALTER: '14102026 00:00:00' }];
     return [{ CODTAB: 8 }];
   };
-  const POST = new Function('requireSession', 'executeQuery', 'canAnalyzeOtherSellers', 'callSankhya', 'priceInheritanceCtes',
+  const POST = new Function('requireSession', 'executeQuery', 'canAnalyzeOtherSellers', 'callSankhya', 'priceInheritanceCtes', 'allocateOrderLots',
     js.replace('export async function POST', 'return async function POST'))(
       async () => ({ sellerId: 123 }), executeQuery, async () => false,
-      async (...args) => { sent.push(args.at(-1)); return { responseBody: { pk: { NUNOTA: { $: '1234' } } } }; }, priceInheritanceCtes);
+      async (...args) => { sent.push(args.at(-1)); return { responseBody: { pk: { NUNOTA: { $: '1234' } } } }; }, priceInheritanceCtes, allocateOrderLots);
   const response = await POST(new Request('http://local/api/sankhya/orders', {
     method: 'POST', body: JSON.stringify({ partner: 7212, company: 8, priceCode: 8, operation: 5, negotiation: 23,
       items: [{ product: 3799, quantity, location, control: '50355', unitPrice: 13.8, priceTable: 2602, volume: 'UN' }] }),
@@ -76,4 +77,15 @@ test('order validation only uses location 1010101 and sends this origin to Sankh
   assert.equal(insufficient.response.status, 400);
   assert.match(insufficient.body.error, /Estoque insuficiente/);
   assert.equal(insufficient.sent.length, 0);
+});
+
+test('order submission includes separate lot lines in expiry order', async () => {
+  const base = { CODPROD: 3799, AGRUPMIN: 1, CODLOCAL: 1010101, NUTAB: 2602, VLRVENDA: 13.8 };
+  const result = await orderApi(1010101, 8, [
+    { ...base, CONTROLE: '50355', DISPONIVEL: 20, DTVAL: '01122026 00:00:00' },
+    { ...base, CONTROLE: 'soon', DISPONIVEL: 3, DTVAL: '01112026 00:00:00' },
+  ]);
+  assert.equal(result.response.status, 200);
+  assert.equal(result.sent.length, 1);
+  assert.deepEqual(result.sent[0].nota.itens.item.map(row => [row.CONTROLE.$, row.QTDNEG.$]), [['soon', '3'], ['50355', '5']]);
 });

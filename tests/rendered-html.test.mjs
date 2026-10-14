@@ -481,7 +481,8 @@ test("sends orders through an authenticated Sankhya service session", async () =
   assert.match(orderSource, /operation !== 5 && operation !== 6/);
   assert.match(orderSource, /operation === 6 && negotiation !== 53/);
   assert.match(orderSource, /P\.AGRUPMIN/);
-  assert.match(orderSource, /múltiplos de \$\{grouping\}/);
+  assert.match(orderSource, /allocateOrderLots\(items, validRows\)/);
+  assert.match(await readFile(path.join(projectRoot, "app", "stock-lots.ts"), "utf8"), /múltiplos de \$\{grouping\}/);
   assert.match(orderSource, /PERCDESC:\s*\{ \$: String\(-Number\(item\.adjustmentPercent \|\| 0\)\) \}/);
   assert.match(orderSource, /desconto ou acréscimo percentual inválido/);
   assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);
