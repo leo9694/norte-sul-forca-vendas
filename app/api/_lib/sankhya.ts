@@ -176,6 +176,8 @@ export async function loginSankhya(username: string, password: string) {
   };
 }
 
+export class SankhyaRejectedError extends Error {}
+
 async function callSankhyaOnce(
   jsessionid: string,
   module: "mge" | "mgecom",
@@ -199,7 +201,8 @@ async function callSankhyaOnce(
     if (response.status === 401 || response.status === 403) {
       throw new Error(`SANKHYA_AUTH_REQUIRED: ${result.statusMessage || "Não autorizado."}`);
     }
-    throw new Error(result.statusMessage || "O Sankhya não concluiu a operação.");
+    const ErrorType = response.ok && result.status !== "1" ? SankhyaRejectedError : Error;
+    throw new ErrorType(result.statusMessage || "O Sankhya não concluiu a operação.");
   }
   return result;
 }

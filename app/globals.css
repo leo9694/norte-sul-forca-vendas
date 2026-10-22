@@ -85,6 +85,133 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .secondary:hover { background: #f7faf8; }
 
 /* login */
+.clients-create-row { display: flex; justify-content: flex-end; margin: -8px 0 22px; }
+.client-card-open { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.client-card-open:hover { border-color: var(--green); }
+.client-card-open:focus-visible { outline: 3px solid var(--green); outline-offset: 3px; }
+.client-details-panel { width: min(920px, calc(100% - 32px)); height: min(780px, 90dvh); max-width: none; max-height: 95dvh; margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 20px; background: white; color: var(--ink); box-shadow: var(--shadow); overflow: hidden; }
+.client-details-panel[open] { display: flex; flex-direction: column; }
+.client-details-panel::backdrop { background: rgba(7,27,18,.55); backdrop-filter: blur(4px); }
+.client-details-panel > header { display: flex; align-items: center; gap: 15px; padding: 24px; border-bottom: 1px solid var(--line); }
+.client-details-panel > header > div { flex: 1; min-width: 0; }
+.client-details-panel h2 { margin: 6px 0 0; font-size: 22px; overflow-wrap: anywhere; }
+.client-details-panel > header > button { flex-shrink: 0; }
+.client-detail-tabs { display: flex; flex-shrink: 0; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.client-detail-tabs > button { flex-shrink: 0; padding: 16px 12px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.client-detail-tabs > button[aria-selected=true] { border-bottom-color: var(--green); color: var(--green-dark); font-weight: 800; }
+.client-details-body { padding: 20px 24px 28px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.client-details-body h3 { margin: 16px 0; font-size: 16px; }
+.client-detail-status { display: flex; gap: 7px; align-items: center; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.client-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 28px; margin: 0 0 24px; }
+.client-detail-field { min-width: 0; }
+.client-detail-field dt { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+.client-detail-field dd { margin: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.client-detail-contacts, .client-detail-orders { display: grid; gap: 14px; }
+.client-detail-contacts > article, .client-detail-orders > article { border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.client-detail-contacts h4 { margin: 0 0 18px; font-size: 14px; color: var(--green-dark); }
+.client-detail-contacts dl, .client-detail-orders dl { margin-bottom: 0; }
+.client-detail-empty { padding: 24px 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.client-history-heading, .client-detail-orders article > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.client-history-heading > span, .client-detail-orders article > p { font-size: 12px; color: var(--muted); }
+.client-order-status { border-radius: 20px; padding: 6px 10px; font-size: 11px; background: #fff4e3; color: #8a5000; }
+.client-order-status.billed { color: var(--green-dark); background: var(--green-soft); }
+.client-order-value { display: block; margin-top: 18px; color: var(--green-dark); font-size: 18px; }
+.duplicate-order-panel { width: min(560px, calc(100% - 24px)); max-width: none; max-height: 92dvh; margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 18px; background: white; color: var(--ink); box-shadow: var(--shadow); overflow: hidden; }
+.duplicate-order-panel[open] { display: flex; flex-direction: column; }
+.duplicate-order-panel::backdrop { background: rgba(7,27,18,.55); backdrop-filter: blur(4px); }
+.duplicate-order-panel > header { display: flex; align-items: center; gap: 12px; padding: 24px; border-bottom: 1px solid var(--line); }
+.duplicate-order-panel > header > div { flex: 1; min-width: 0; }
+.duplicate-order-panel h2 { margin: 5px 0 0; font-size: 21px; }
+.duplicate-order-body { display: flex; flex-direction: column; gap: 22px; padding: 24px; overflow-y: auto; min-height: 0; font-size: 14px; line-height: 1.6; }
+.duplicate-order-origin { display: grid; gap: 5px; }
+.duplicate-order-origin > span { color: var(--muted); font-size: 12px; }
+.duplicate-order-origin > strong { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.duplicate-order-label { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.duplicate-order-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.duplicate-order-choices > button, .duplicate-client-list > button { border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--ink); padding: 13px; text-align: left; font: inherit; cursor: pointer; }
+.duplicate-order-choices > button.selected, .duplicate-client-list > button.selected { border-color: var(--green); background: var(--green-soft); color: var(--green-dark); }
+.duplicate-order-choices > button { min-height: 60px; text-align: center; line-height: 1.4; font-weight: 600; }
+.duplicate-order-choices > button:focus-visible, .duplicate-client-list > button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.duplicate-order-body > .search-box { width: 100%; margin: 0; }
+.duplicate-order-body > .registration-hint, .duplicate-order-body > p { margin: 0; }
+.duplicate-client-list { display: grid; gap: 8px; max-height: 240px; overflow-y: auto; margin: 0; }
+.duplicate-client-list > button { display: grid; gap: 4px; }
+.duplicate-client-list strong { font-size: 13px; overflow-wrap: anywhere; }
+.duplicate-client-list small { font-size: 11px; color: var(--muted); }
+.duplicate-order-panel > footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 18px 24px; border-top: 1px solid var(--line); }
+.duplicate-order-panel > footer > button { justify-content: center; min-height: 46px; }
+.draft-backup-versions { margin-top: 10px; font-size: 12px; }
+.draft-backup-versions > summary { cursor: pointer; color: var(--green-dark); font-weight: 700; }
+.draft-backup-versions > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.draft-backup-versions button { flex-shrink: 0; font-size: 11px; padding: 8px 10px; min-height: 36px; }
+@media (max-width: 600px) { .draft-backup-versions > div { flex-wrap: wrap; } }
+@media (max-width: 480px) {
+  .duplicate-order-panel > header, .duplicate-order-body { padding: 20px; }
+  .duplicate-order-panel > footer { padding: 16px 20px; grid-template-columns: minmax(0, 1fr); }
+  .duplicate-order-panel > footer > .primary { grid-row: 1; }
+}
+@media (max-width: 600px) {
+  .client-details-panel { width: calc(100% - 16px); height: 94dvh; border-radius: 14px; }
+  .client-details-panel > header { padding: 18px 16px; gap: 10px; }
+  .client-details-panel h2 { font-size: 18px; }
+  .client-detail-tabs { padding: 0 8px; }
+  .client-detail-tabs > button { padding: 14px 10px; font-size: 12px; }
+  .client-details-body { padding: 16px; }
+  .client-detail-grid { gap: 18px; grid-template-columns: minmax(0, 1fr); }
+}
+.registration-backdrop { padding: 16px; }
+.registration-panel { display: flex; flex-direction: column; width: min(1100px, 100%); max-height: 94dvh; border-radius: 20px; background: white; box-shadow: var(--shadow); overflow: hidden; }
+.registration-panel > header { display: flex; justify-content: space-between; align-items: center; padding: 22px 28px; border-bottom: 1px solid var(--line); }
+.registration-panel h2 { margin: 5px 0 0; font-size: 22px; }
+.registration-steps { list-style: none; margin: 0; padding: 22px 28px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.registration-steps li { position: relative; display: grid; justify-items: center; gap: 9px; color: var(--muted); text-align: center; }
+.registration-steps li::before { content: ''; position: absolute; height: 2px; width: 100%; background: var(--line); top: 18px; left: -50%; }
+.registration-steps li:first-child::before { display: none; }
+.registration-steps li > span { z-index: 1; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: #edf1ee; font-weight: 800; }
+.registration-steps li.active > span, .registration-steps li.complete > span { background: var(--green); color: white; }
+.registration-steps li.active { color: var(--green-dark); font-weight: 800; }
+.registration-steps small { font-size: 12px; }
+.registration-panel form { display: flex; flex-direction: column; min-height: 0; }
+.registration-body { padding: 22px 28px; overflow-y: auto; overscroll-behavior: contain; min-height: 160px; }
+.registration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 0; margin: 0; border: 0; min-width: 0; }
+.registration-field { display: grid; gap: 7px; min-width: 0; color: var(--ink); font-size: 12px; font-weight: 700; }
+.registration-field input, .registration-field select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--ink); font-size: 14px; font-weight: 400; min-width: 0; }
+.registration-field input:disabled, .registration-field select:disabled { background: #f4f7f5; color: var(--muted); }
+.registration-lookup { display: flex; gap: 8px; align-items: flex-end; min-width: 0; }
+.registration-lookup > label { flex: 1; }
+.registration-lookup > button { flex-shrink: 0; font-size: 12px; padding: 0 12px; }
+.registration-person { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 24px; font-size: 13px; }
+.registration-person label { display: flex; align-items: center; gap: 7px; }
+.registration-hint { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0 0 20px; }
+.registration-contact { min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin: 0 0 18px; }
+.registration-contact legend { font-size: 13px; font-weight: 800; padding: 0 7px; color: var(--green-dark); }
+.registration-remove { display: flex; align-items: center; gap: 6px; padding: 0; margin-top: 16px; border: 0; background: none; color: #a12c2c; font-size: 12px; cursor: pointer; }
+.registration-notice { padding: 14px 18px; margin: 12px 0; border: 1px solid #c5e2d5; border-radius: 12px; color: var(--green-dark); background: var(--green-soft); font-size: 13px; line-height: 1.6; }
+.registration-feedback { width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; margin: auto; padding: 30px; border: 1px solid var(--line); border-radius: 20px; background: white; color: var(--ink); box-shadow: var(--shadow); text-align: center; }
+.registration-feedback::backdrop { background: rgba(7,27,18,.55); backdrop-filter: blur(4px); }
+.registration-feedback-icon { display: grid; place-items: center; width: 56px; height: 56px; margin: 0 auto 18px; border-radius: 50%; background: var(--green-soft); color: var(--green); }
+.registration-feedback.error .registration-feedback-icon { background: #fff0f0; color: #c53030; }
+.registration-feedback h2 { margin: 0 0 12px; font-size: 21px; }
+.registration-feedback p { margin: 0 0 24px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.registration-feedback > button { width: 100%; justify-content: center; min-height: 44px; }
+.registration-panel footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 28px; border-top: 1px solid var(--line); background: white; }
+.registration-panel footer > span { color: var(--muted); font-size: 11px; }
+.registration-panel footer > div { display: flex; gap: 10px; }
+@media (max-width: 600px) {
+  .registration-backdrop { padding: 8px; }
+  .registration-panel { max-height: 96dvh; border-radius: 14px; }
+  .registration-panel > header, .registration-body { padding: 16px; }
+  .registration-steps { padding: 16px 8px; }
+  .registration-steps small { font-size: 10px; }
+  .registration-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .registration-person { gap: 12px; }
+  .registration-person > span { width: 100%; }
+  .registration-panel footer { padding: 14px 16px; flex-wrap: wrap; }
+  .registration-panel footer > div { margin-left: auto; }
+  .registration-contact { padding: 12px; }
+  .clients-create-row { margin: 0 0 18px; }
+}
+
 .login-page { min-height: 100vh; display: grid; grid-template-columns: 1.1fr .9fr; background: white; }
 .login-story {
   padding: 48px 7vw; display: flex; flex-direction: column;

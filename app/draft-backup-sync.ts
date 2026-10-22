@@ -1,4 +1,5 @@
-type Draft = { id: string; updatedAt: number; sellerId?: number; sellerName?: string };
+import { draftBackupContent, draftBackupIdentity } from './draft-backup-model';
+type Draft = { id: string; backupId?: string; updatedAt: number; sellerId?: number; sellerName?: string };
 
 // Confirma somente respostas de sucesso; falhas nunca removem pedidos locais.
 export function createDraftBackupSync<T extends Draft>({ sessionSellerId, save, onProblem, now = Date.now }: {
@@ -7,7 +8,7 @@ export function createDraftBackupSync<T extends Draft>({ sessionSellerId, save, 
   onProblem: (message: string) => void;
   now?: () => number;
 }) {
-  const synced = new Set<string>();
+  const synced = new Map<string, string>();
   const retries = new Map<string, { at: number; attempts: number }>();
   const denied = new Map<string, number>();
   let running = false;
@@ -22,15 +23,20 @@ export function createDraftBackupSync<T extends Draft>({ sessionSellerId, save, 
       // Ignora apenas na fila de backup; mantém o pedido e o vendedor locais.
       // Registros antigos sem vendedor pertencem ao dono da fila local.
       const eligible = drafts.filter(draft => Number(draft.sellerId ?? sessionSellerId) === sessionSellerId);
-      const unique = new Map(eligible.map(draft => [`${draft.id}:${draft.updatedAt}`, draft]));
+      const unique = new Map<string, T>();
+      for (const draft of eligible) {
+        const key = `${draftBackupIdentity(draft)}:${draft.sellerId ?? sessionSellerId}`;
+        const previous = unique.get(key);
+        if (!previous || draft.updatedAt > previous.updatedAt) unique.set(key, draft);
+      }
       try {
         for (const [key, draft] of unique) {
           if (stopped) break;
-          const permissionKey = `${draft.id}:${draft.sellerId}`;
-          if (synced.has(key) || (retries.get(permissionKey)?.at ?? 0) > now() || (denied.get(permissionKey) ?? 0) > now()) continue;
+          const permissionKey = key, content = draftBackupContent(draft);
+          if (synced.get(key) === content || (retries.get(permissionKey)?.at ?? 0) > now() || (denied.get(permissionKey) ?? 0) > now()) continue;
           try {
             await save(draft);
-            synced.add(key);
+            synced.set(key, content);
             retries.delete(permissionKey);
             denied.delete(permissionKey);
           } catch (error) {
@@ -54,7 +60,7 @@ export function createDraftBackupSync<T extends Draft>({ sessionSellerId, save, 
             if (!notified || status === 401 || status === 409) { notified = true; onProblem(message); }
           }
         }
-        if (!stopped && [...unique.keys()].every(key => synced.has(key))) {
+        if (!stopped && [...unique].every(([key, draft]) => synced.get(key) === draftBackupContent(draft))) {
           notified = false;
           onProblem("");
         }

@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDollarSign,
+  Copy,
   ClipboardList,
   CloudCheck,
   CloudOff,
@@ -50,6 +51,11 @@ import { readDraftRecords, writeDraftRecord } from "./draft-journal";
 import { createDraftBackupSync } from "./draft-backup-sync";
 import { refreshDraftPrices } from "./draft-prices";
 import { compareLotExpiry } from "./stock-lots";
+import { ClientRegistrationForm } from "./client-registration-form";
+import { RegistrationFeedbackPanel } from "./registration-feedback-panel";
+import { ClientDetailsPanel } from "./client-details-panel";
+import { DuplicateOrderPanel } from "./duplicate-order-panel";
+import { draftBackupContent, draftBackupIdentity, groupDraftBackups } from './draft-backup-model';
 import {
   getOfflineDrafts,
   getOfflineDraftHistory,
@@ -61,7 +67,7 @@ import {
 } from "./offline-store";
 
 type ApiRow = Record<string, string | number | null>;
-type Partner = ApiRow & {
+export type Partner = ApiRow & {
   CODPARC: number;
   NOMEPARC: string;
   CODTAB?: number | null;
@@ -117,8 +123,9 @@ type AppHistoryState = {
   dialog?: "send" | "groups" | "brand" | "dashboard-detail";
   conversationId?: string;
 };
-type OrderDraft = {
+export type OrderDraft = {
   id: string;
+  backupId?: string;
   updatedAt: number;
   sellerId?: number;
   sellerName?: string;
@@ -1754,6 +1761,7 @@ export function SalesApp() {
             : <HomeScreen sellerId={sellerId} sellerName={sellerName || user} online={online} canAnalyzeSellers={canMonitorSales} />
         ) : screen === "orders" ? (
           <OrdersScreen
+            currentUserId={userId}
             orders={orders}
             loading={loadingOrders}
             drafts={drafts}
@@ -1763,6 +1771,16 @@ export function SalesApp() {
             currentSellerId={sellerId}
             currentSellerName={sellerName || user}
             onNew={openNewOrder}
+            onDuplicate={async (draft) => {
+              await saveDraft(draft);
+              setActiveDraft(draft);
+              setStartingPartner(draft.partner);
+              setOrderSellerId(draft.sellerId ?? sellerId);
+              setOrderSellerName(draft.sellerName || sellerName);
+              pushHistoryView("new");
+              setScreen("new");
+              setToast("Pedido duplicado como novo rascunho. Revise antes de enviar.");
+            }}
             onDeleteDraft={(id) => {
               removeDraft(id);
               setToast("Rascunho excluído.");
@@ -1784,7 +1802,9 @@ export function SalesApp() {
           />
         ) : screen === "clients" ? (
           <ClientsScreen
+            currentUserId={userId}
             clients={clients}
+            orders={[...(offlineData?.orders || []), ...orders]}
             loading={loadingClients}
             online={online}
             canAnalyzeSellers={canMonitorSales}
@@ -1809,7 +1829,9 @@ export function SalesApp() {
             onInstall={() => void installApplication()}
             onLoad={() => void makeLoad()}
             onRestoreDraft={async (draft) => {
-              await saveDraft({ ...draft, id: `draft-${crypto.randomUUID()}`, updatedAt: Date.now() });
+              const backupId = draftBackupIdentity(draft);
+              const existing = draftsRef.current.find(item => draftBackupIdentity(item) === backupId && draftBackupContent(item) === draftBackupContent(draft));
+              if (!existing) await saveDraft({ ...draft, backupId, id: `draft-${crypto.randomUUID()}`, updatedAt: Date.now() });
               setToast("Rascunho restaurado e disponível na aba Pedidos.");
               navigateTo("orders");
             }}
@@ -2864,6 +2886,7 @@ function DashboardDetailPanel({
 }
 
 function OrdersScreen({
+  currentUserId,
   orders,
   loading,
   drafts,
@@ -2873,11 +2896,13 @@ function OrdersScreen({
   currentSellerId,
   currentSellerName,
   onNew,
+  onDuplicate,
   onDeleteDraft,
   onDraftSent,
   onResume,
   onPeriodChange,
 }: {
+  currentUserId: number;
   orders: ApiRow[];
   loading: boolean;
   drafts: OrderDraft[];
@@ -2887,6 +2912,7 @@ function OrdersScreen({
   currentSellerId: number;
   currentSellerName: string;
   onNew: (sellerId?: number, sellerName?: string) => void;
+  onDuplicate: (draft: OrderDraft) => Promise<void>;
   onDeleteDraft: (id: string) => void;
   onDraftSent: (id: string | undefined, draftId: string) => void;
   onResume: (draft: OrderDraft) => void;
@@ -2908,6 +2934,23 @@ function OrdersScreen({
   const [draftReportError, setDraftReportError] = useState("");
   const [openingOrderDocument, setOpeningOrderDocument] = useState<string | null>(null);
   const [orderDocumentError, setOrderDocumentError] = useState("");
+  const [duplicateSource, setDuplicateSource] = useState<OrderDraft | null>(null);
+  const [loadingDuplicate, setLoadingDuplicate] = useState(false);
+  const [duplicateError, setDuplicateError] = useState("");
+  const duplicateLoadingRef = useRef(false);
+  const duplicateSentOrder = async (order: ApiRow) => {
+    if (duplicateLoadingRef.current || !online) return;
+    duplicateLoadingRef.current = true;
+    setDraftMenuId(null); setDuplicateError(''); setLoadingDuplicate(true);
+    try {
+      const result = await api<{ draft: OrderDraft }>(`/api/sankhya/order-report?nunota=${Number(order.NUNOTA)}&purpose=duplicate`, {
+        cache: 'no-store', headers: { 'X-FV-User-Id': String(currentUserId), 'X-FV-Seller-Id': String(currentSellerId) },
+      });
+      if (!result.draft?.cart?.length) throw new Error('Pedido sem itens para duplicar.');
+      setDuplicateSource(result.draft);
+    } catch (e) { setDuplicateError(e instanceof Error ? e.message : 'Não foi possível consultar os itens do pedido.'); }
+    finally { duplicateLoadingRef.current = false; setLoadingDuplicate(false); }
+  };
   useEffect(() => setSelectedSellerId(currentSellerId), [currentSellerId]);
   useEffect(() => {
     if (!draftMenuId) return;
@@ -3175,6 +3218,7 @@ function OrdersScreen({
                       setDraftSendError("");
                       setDraftMenuId(null);
                     }}><Send size={14} /> Enviar</button>
+                    <button role="menuitem" className="draft-report" onClick={() => { setDraftMenuId(null); setDuplicateError(''); setDuplicateSource({ ...draft, sellerName: sellerNameForDraft(draft) }); }}><Copy size={14} /> Duplicar pedido</button>
                     <button role="menuitem" className="danger" onClick={() => {
                       setDraftPendingDeletion(draft);
                       setDraftMenuId(null);
@@ -3203,6 +3247,7 @@ function OrdersScreen({
                       {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order)}><FileText size={14} /> Relatório do pedido</button>
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order, true)}><Barcode size={14} /> Pedido com Código de barras</button>
+                        <button role="menuitem" className="draft-report" disabled={!online || loadingDuplicate} onClick={() => void duplicateSentOrder(order)}><Copy size={14} /> Duplicar pedido</button>
                         {!online && <small>Conecte-se para consultar os itens do pedido.</small>}
                       </div>}
                     </div>
@@ -3222,6 +3267,9 @@ function OrdersScreen({
       </section>
       {draftReportError && <div className="global-error">{draftReportError}</div>}
       {orderDocumentError && <div className="global-error">{orderDocumentError}</div>}
+      {loadingDuplicate && <p className="client-detail-status" role="status"><LoaderCircle size={17} className="spin" /> Carregando o pedido completo para duplicar...</p>}
+      {duplicateError && <div className="global-error" role="alert">{duplicateError}</div>}
+      {duplicateSource && <DuplicateOrderPanel source={duplicateSource} userId={currentUserId} sessionSellerId={currentSellerId} sellerId={Number(duplicateSource.sellerId || currentSellerId)} sellerName={sellerNameForDraft(duplicateSource)} online={online} offlineData={offlineData} onClose={() => setDuplicateSource(null)} onDuplicate={onDuplicate} />}
       {draftPendingDeletion && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Excluir rascunho">
           <div className="confirm-modal draft-delete-modal">
@@ -3262,14 +3310,18 @@ function Metric({ icon, label, value, blue }: { icon: React.ReactNode; label: st
 }
 
 function ClientsScreen({
+  currentUserId,
   clients,
+  orders,
   loading,
   online,
   canAnalyzeSellers,
   currentSellerId,
   currentSellerName,
 }: {
+  currentUserId: number;
   clients: Client[];
+  orders: ApiRow[];
   loading: boolean;
   online: boolean;
   canAnalyzeSellers: boolean;
@@ -3277,9 +3329,13 @@ function ClientsScreen({
   currentSellerName: string;
 }) {
   const [query, setQuery] = useState("");
+  const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [registrationNotice, setRegistrationNotice] = useState("");
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedSellerId, setSelectedSellerId] = useState(currentSellerId);
   const [sellers, setSellers] = useState<DashboardSeller[]>([]);
   const [portfolio, setPortfolio] = useState<Client[]>(clients);
+  useEffect(() => setSelectedClient(null), [currentUserId, currentSellerId, selectedSellerId]);
   const [loadingSelectedPortfolio, setLoadingSelectedPortfolio] = useState(false);
   useEffect(() => setSelectedSellerId(currentSellerId), [currentSellerId]);
   useEffect(() => {
@@ -3320,6 +3376,8 @@ function ClientsScreen({
       <header className="desktop-header">
         <div><span className="eyebrow">Carteira comercial</span><h1>Clientes</h1><p>Todos os clientes ativos vinculados ao seu cadastro de vendedor.</p></div>
       </header>
+      <div className="clients-create-row"><button className="primary" onClick={() => { setRegistrationNotice(''); setRegistrationOpen(true); }}><Plus size={18} /> Novo cliente</button></div>
+      {registrationNotice && <RegistrationFeedbackPanel kind="success" message={registrationNotice} onClose={() => setRegistrationNotice('')} />}
 
       {canAnalyzeSellers && sellers.length > 0 && (
         <section className="clients-seller-switch" aria-label="Selecionar vendedor para carteira">
@@ -3348,7 +3406,7 @@ function ClientsScreen({
         </div>
         <div className="client-grid">
           {isLoading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando toda a carteira...</div> : filtered.map((client) => (
-            <article className="client-card" key={client.CODPARC}>
+            <article className="client-card client-card-open" key={client.CODPARC} role="button" tabIndex={0} aria-label={`Ver informações de ${client.NOMEPARC}`} onClick={() => setSelectedClient(client)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedClient(client); } }}>
               <span className="client-avatar"><Building2 size={20} /></span>
               <div className="client-main">
                 <strong>{client.NOMEPARC}</strong>
@@ -3369,6 +3427,14 @@ function ClientsScreen({
           {!isLoading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
         </div>
       </section>
+      {selectedClient && <ClientDetailsPanel key={`${currentUserId}:${selectedSellerId}:${selectedClient.CODPARC}`} client={selectedClient} orders={selectedSellerId === currentSellerId ? orders : []} userId={currentUserId} sessionSellerId={currentSellerId} sellerId={selectedSellerId} online={online} onClose={() => setSelectedClient(null)} />}
+      {registrationOpen && <ClientRegistrationForm key={`${currentUserId}:${selectedSellerId}`} userId={currentUserId} sessionSellerId={currentSellerId} sellerId={selectedSellerId} sellerName={selectedSellerName} online={online}
+        onClose={() => setRegistrationOpen(false)} onCreated={(id, data) => {
+          setRegistrationOpen(false);
+          setRegistrationNotice(`Cliente ${id} cadastrado com os contatos no Sankhya. Faça uma nova carga para atualizar os dados offline.`);
+          setPortfolio(current => [{ CODPARC: id, NOMEPARC: data.tradeName, RAZAOSOCIAL: data.legalName, TELEFONE: data.phone, EMAIL: data.email, CGCCPF: data.document, CODTAB: null, CODVEND: data.sellerId }, ...current.filter(c => c.CODPARC !== id)] as Client[]);
+          void api<{ rows: Client[] }>(`/api/sankhya/data?kind=portfolio&seller=${selectedSellerId}`, { cache: 'no-store' }).then(result => setPortfolio(result.rows)).catch(() => {});
+        }} />}
     </div>
   );
 }
@@ -3694,6 +3760,7 @@ function MoreScreen({
 }) {
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [backups, setBackups] = useState<DraftBackup[]>([]);
+  const backupGroups = useMemo(() => groupDraftBackups(backups), [backups]);
   const [loadingBackups, setLoadingBackups] = useState(false);
   const [restoringDraftId, setRestoringDraftId] = useState("");
   const [backupError, setBackupError] = useState("");
@@ -3708,10 +3775,10 @@ function MoreScreen({
     setBackups([]);
     try {
       const local = await getOfflineDraftHistory<OrderDraft>(sellerId).catch(() => []);
-      const localRows: DraftBackup[] = local.sort((a, b) => b.updatedAt - a.updatedAt).map(draft => ({
+      const localRows: DraftBackup[] = local.map(draft => ({ ...draft, sellerId: draft.sellerId ?? sellerId })).sort((a, b) => b.updatedAt - a.updatedAt).map(draft => ({
         draft_id: `local-${draft.id}-${draft.updatedAt}`, seller_id: draft.sellerId || sellerId,
         seller_name: draft.sellerName || sellerName, partner_id: draft.partner.CODPARC,
-        partner_name: `${draft.partner.NOMEPARC} · Cópia neste aparelho`, item_count: draft.cart.length,
+        partner_name: draft.partner.NOMEPARC, item_count: draft.cart.length,
         total_units: draft.cart.reduce((sum, item) => sum + item.quantity, 0),
         updated_at: draft.updatedAt, backed_up_at: draft.updatedAt, draft,
       }));
@@ -3836,21 +3903,25 @@ function MoreScreen({
               <button className="modal-close" onClick={() => setRestoreOpen(false)} aria-label="Fechar"><X size={20} /></button>
             </header>
             <div className="draft-backup-list">
-              {loadingBackups ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando backups...</div> : backups.map((backup) => (
+              {loadingBackups ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando backups...</div> : backupGroups.map((backup) => (
                 <article key={backup.draft_id}>
                   <span className="order-icon"><FileText size={19} /></span>
                   <div className="draft-backup-copy">
-                    <strong>{backup.partner_name}</strong>
+                    <strong>{backup.draft.partner.NOMEPARC}</strong>
                     <small>Vendedor: {backup.seller_name || backup.seller_id}</small>
                     <span>{backup.item_count} {backup.item_count === 1 ? "produto" : "produtos"} · {Number(backup.total_units).toLocaleString("pt-BR")} unidades · {money(cartTotal(backup.draft.cart))}</span>
                     <time>Salvo em {new Date(backup.backed_up_at).toLocaleString("pt-BR")}</time>
+                    {backup.versions.length > 0 && <details className="draft-backup-versions"><summary>Versões anteriores ({backup.versions.length})</summary>{backup.versions.map(version => <div key={version.draft_id}>
+                      <span>{new Date(version.updated_at).toLocaleString('pt-BR')} · {version.item_count} produtos · {money(cartTotal(version.draft.cart))}</span>
+                      <button type="button" className="secondary" disabled={Boolean(restoringDraftId)} onClick={() => restoreDraft(version)}>Restaurar versão</button>
+                    </div>)}</details>}
                   </div>
                   <button className="secondary" disabled={Boolean(restoringDraftId)} onClick={() => restoreDraft(backup)}>
                     {restoringDraftId === backup.draft_id ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} Restaurar
                   </button>
                 </article>
               ))}
-              {!loadingBackups && !backupError && !backups.length && <div className="empty-state">Nenhum rascunho foi sincronizado ainda.</div>}
+              {!loadingBackups && !backupError && !backupGroups.length && <div className="empty-state">Nenhum rascunho foi sincronizado ainda.</div>}
               {backupError && <div className="global-error">{backupError}</div>}
             </div>
           </section>
@@ -4215,6 +4286,7 @@ function NewOrderV2({
 
   const currentDraft = (): OrderDraft => ({
     id: draftId,
+    ...(draft?.backupId ? { backupId: draft.backupId } : {}),
     updatedAt: Date.now(),
     sellerId: actingSellerId,
     sellerName: actingSellerName,

@@ -27,7 +27,7 @@ test('decreasing quantity with zero stock preserves the remaining items', async 
 test('backup retains recoverable products after partial removal and ignores late requests', async () => {
   const folder = await mkdtemp(path.join(tmpdir(), 'fv-draft-recovery-'));
   process.env.DRAFT_BACKUP_DATABASE_PATH = path.join(folder, 'drafts.sqlite');
-  const source = await readFile(new URL('../db/drafts.ts', import.meta.url), 'utf8');
+  const source = (await readFile(new URL('../db/drafts.ts', import.meta.url), 'utf8')).replace('"../app/draft-backup-model"', JSON.stringify(new URL('../app/draft-backup-model.ts', import.meta.url).href));
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   const { saveDraftBackup, listDraftBackups } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
   const make = (updatedAt, codes) => ({ id: 'draft-test', sellerId: 10, sellerName: 'Vendedora',

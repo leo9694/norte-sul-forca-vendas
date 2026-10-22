@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { draftBackupContent } from "../app/draft-backup-model";
 
 export type StoredDraftBackup = {
   draft_id: string;
@@ -72,7 +73,7 @@ function draftDetails(draft: Record<string, unknown>) {
   const partner = draft.partner as Record<string, unknown>;
   const cart = draft.cart as Array<Record<string, unknown>>;
   return {
-    draftId: String(draft.id),
+    draftId: String(draft.backupId || draft.id),
     sellerId: Number(draft.sellerId),
     sellerName: String(draft.sellerName || ""),
     partnerId: Number(partner.CODPARC),
@@ -84,18 +85,58 @@ function draftDetails(draft: Record<string, unknown>) {
   };
 }
 
+const compactedOwners = new Set<number>();
+const revisionKey = (draft: object) => createHash('sha256').update(draftBackupContent(draft)).digest('hex');
+
+// Migra apenas cópias equivalentes. Toda versão com conteúdo diferente é preservada.
+function compactHistory(ownerUserId: number) {
+  if (compactedOwners.has(ownerUserId)) return;
+  const db = getDatabase();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const history = db.prepare('SELECT * FROM draft_backup_history WHERE owner_user_id=?').all(ownerUserId);
+    const legacy = db.prepare('SELECT * FROM draft_backup_versions WHERE owner_user_id=?').all(ownerUserId);
+    const valid: Array<{ row: Record<string, unknown>; legacy: boolean; draftId: string; key: string }> = [];
+    const unique = new Map<string, { draftId: string; key: string; payload: string; updatedAt: number; savedAt: number }>();
+    for (const [rows, old] of [[history, false], [legacy, true]] as const) for (const row of rows) {
+      try {
+        const draft = JSON.parse(String(row.payload)) as Record<string, unknown>;
+        const details = draftDetails(draft), key = revisionKey(draft);
+        const mapKey = `${details.draftId}:${key}`, previous = unique.get(mapKey);
+        if (!previous || details.updatedAt > previous.updatedAt) unique.set(mapKey, { draftId: details.draftId, key, payload: details.payload, updatedAt: details.updatedAt, savedAt: Number(row.backed_up_at) });
+        valid.push({ row, legacy: old, draftId: details.draftId, key });
+      } catch { /* Não apaga um registro que não conseguiu interpretar. */ }
+    }
+    const insert = db.prepare(`INSERT INTO draft_backup_history(owner_user_id,draft_id,updated_at,payload,backed_up_at,revision_key)
+      VALUES(?,?,?,?,?,?) ON CONFLICT(owner_user_id,draft_id,revision_key) DO UPDATE SET
+      updated_at=excluded.updated_at,payload=excluded.payload,backed_up_at=excluded.backed_up_at
+      WHERE excluded.updated_at >= draft_backup_history.updated_at`);
+    for (const item of unique.values()) insert.run(ownerUserId, item.draftId, item.updatedAt, item.payload, item.savedAt, item.key);
+    for (const item of valid) {
+      if (item.legacy) db.prepare('DELETE FROM draft_backup_versions WHERE owner_user_id=? AND draft_id=? AND updated_at=? AND payload=?')
+        .run(ownerUserId, String(item.row.draft_id), Number(item.row.updated_at), String(item.row.payload));
+      else if (item.row.revision_key !== item.key || item.row.draft_id !== item.draftId) db.prepare('DELETE FROM draft_backup_history WHERE owner_user_id=? AND draft_id=? AND revision_key=?')
+        .run(ownerUserId, String(item.row.draft_id), String(item.row.revision_key));
+    }
+    db.exec('COMMIT'); compactedOwners.add(ownerUserId);
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+
 export function saveDraftBackup(ownerUserId: number, draft: Record<string, unknown>) {
   const details = draftDetails(draft);
   const backedUpAt = Date.now();
   const db = getDatabase();
+  compactHistory(ownerUserId);
   db.exec("BEGIN IMMEDIATE");
   try {
   const archive = (payload: string, updatedAt: number, savedAt: number) => {
-    db.prepare(`INSERT OR IGNORE INTO draft_backup_history
+    db.prepare(`INSERT INTO draft_backup_history
       (owner_user_id, draft_id, updated_at, payload, backed_up_at, revision_key)
-      VALUES (?, ?, ?, ?, ?, ?)`)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(owner_user_id,draft_id,revision_key) DO UPDATE SET
+      payload=excluded.payload,updated_at=excluded.updated_at,backed_up_at=excluded.backed_up_at
+      WHERE excluded.updated_at >= draft_backup_history.updated_at`)
       .run(ownerUserId, details.draftId, updatedAt, payload, savedAt,
-        createHash("sha256").update(payload).digest("hex"));
+        revisionKey(JSON.parse(payload)));
   };
   const previous = db.prepare(`SELECT payload, updated_at, backed_up_at FROM draft_backups
     WHERE owner_user_id = ? AND draft_id = ? AND item_count > 0`)
@@ -146,6 +187,7 @@ export function saveDraftBackup(ownerUserId: number, draft: Record<string, unkno
 }
 
 export function listDraftBackups(ownerUserId: number): StoredDraftBackup[] {
+  compactHistory(ownerUserId);
   const rows = getDatabase().prepare(`
     SELECT draft_id, seller_id, seller_name, partner_id, partner_name,
            item_count, total_units, recovery_payload, recovery_item_count,
@@ -185,9 +227,9 @@ export function listDraftBackups(ownerUserId: number): StoredDraftBackup[] {
     try {
       const draft = JSON.parse(String(row.payload)) as Record<string, unknown>;
       const details = draftDetails(draft);
-      if (latest.some((item) => item.draft_id === details.draftId && JSON.stringify(item.draft) === details.payload)) return [];
+      if (latest.some((item) => item.draft_id === details.draftId && draftBackupContent(item.draft) === draftBackupContent(draft))) return [];
       return [{
-        draft_id: `${details.draftId}-version-${createHash("sha256").update(details.payload).digest("hex").slice(0, 16)}`,
+        draft_id: `${details.draftId}-version-${revisionKey(draft).slice(0, 16)}`,
         seller_id: details.sellerId, seller_name: details.sellerName,
         partner_id: details.partnerId, partner_name: `${details.partnerName} · Versão anterior`,
         item_count: details.itemCount, total_units: details.totalUnits,

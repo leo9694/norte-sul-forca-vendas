@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDraftBackupSync } from '../app/draft-backup-sync.ts';
 import { draftSessionConflict } from '../app/api/_lib/draft-session.ts';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+
+const syncSource = (await readFile(new URL('../app/draft-backup-sync.ts', import.meta.url), 'utf8')).replace("'./draft-backup-model'", JSON.stringify(new URL('../app/draft-backup-model.ts', import.meta.url).href));
+const syncJs = ts.transpileModule(syncSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const { createDraftBackupSync } = await import(`data:text/javascript;base64,${Buffer.from(syncJs).toString('base64')}`);
 
 const draft = { id: 'draft-1', updatedAt: 1, sellerId: 123, sellerName: 'Zenaide', partner: { CODPARC: 3923, NOMEPARC: 'Cliente' }, cart: [{ CODPROD: 1, quantity: 2 }] };
 const failure = status => Object.assign(new Error('failure'), { status });
@@ -76,6 +79,8 @@ test('temporary failures back off, retry successfully and confirm only successfu
   assert.deepEqual(warnings.filter(Boolean).length, 1);
   assert.equal(warnings.at(-1), '');
   await queue.sync([{ ...draft, updatedAt: 2 }]);
+  assert.equal(calls, 3); // Apenas o horário mudou: não envia outra cópia.
+  await queue.sync([{ ...draft, updatedAt: 3, cart: [{ CODPROD: 1, quantity: 3 }] }]);
   assert.equal(calls, 4);
 });
 

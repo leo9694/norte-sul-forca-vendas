@@ -8,6 +8,7 @@ function validDraft(value: unknown): value is Record<string, unknown> {
   const partner = draft.partner as Record<string, unknown> | undefined;
   return (
     /^[a-zA-Z0-9_-]{1,120}$/.test(String(draft.id || ""))
+    && (draft.backupId == null || /^[a-zA-Z0-9_-]{1,120}$/.test(String(draft.backupId)))
     && Number.isFinite(Number(draft.updatedAt))
     && Number(draft.updatedAt) > 0
     && Number.isInteger(Number(draft.sellerId))

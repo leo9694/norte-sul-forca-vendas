@@ -1,9 +1,15 @@
 import { canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
+import { readAllQueryRows } from '../../_lib/query-pagination';
+import { draftSessionConflict } from '../../_lib/draft-session';
 
 export async function GET(request: Request) {
   try {
     const session = await requireSession(request);
-    const id = Number(new URL(request.url).searchParams.get("nunota"));
+    const conflict = draftSessionConflict(request, session);
+    if (conflict) return conflict;
+    const params = new URL(request.url).searchParams;
+    const id = Number(params.get("nunota"));
+    const duplicate = params.get('purpose') === 'duplicate';
     if (!Number.isSafeInteger(id) || id <= 0) return Response.json({ error: "Pedido inválido." }, { status: 400 });
     const [header] = await executeQuery(session, `
       SELECT C.NUNOTA, C.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF CGCCPF,
@@ -25,7 +31,7 @@ export async function GET(request: Request) {
     if (Number(header.CODVEND) !== session.sellerId && !(await canAnalyzeOtherSellers(session))) {
       return Response.json({ error: "Sem permissão para consultar este pedido." }, { status: 403 });
     }
-    const items = await executeQuery(session, `
+    const items = await readAllQueryRows(sql => executeQuery(session, sql), `
       SELECT I.CODPROD, P.DESCRPROD, P.REFERENCIA, I.CODVOL,
              I.CODLOCALORIG CODLOCAL, I.CONTROLE, I.NUTAB,
              I.QTDNEG, I.VLRUNIT, I.VLRTOT, NVL(I.VLRDESC,0) VLRDESC
@@ -46,8 +52,8 @@ export async function GET(request: Request) {
       priceCode: 0, priceName: "", negotiation: Number(header.CODTIPVENDA),
       negotiationName: String(header.DESCRTIPVENDA || ""), observation: String(header.OBSERVACAO || ""),
       cart: items.map(item => ({ ...item, quantity: Number(item.QTDNEG),
-        VLRVENDA: Number(item.QTDNEG) > 0 ? (Number(item.VLRTOT) - Number(item.VLRDESC)) / Number(item.QTDNEG) : Number(item.VLRUNIT),
-        adjustmentPercent: 0, DISPONIVEL: 0,
+        VLRVENDA: duplicate ? Number(item.VLRUNIT) : Number(item.QTDNEG) > 0 ? (Number(item.VLRTOT) - Number(item.VLRDESC)) / Number(item.QTDNEG) : Number(item.VLRUNIT),
+        adjustmentPercent: duplicate && Number(item.QTDNEG) * Number(item.VLRUNIT) > 0 ? ((Number(item.VLRTOT) - Number(item.VLRDESC)) / (Number(item.QTDNEG) * Number(item.VLRUNIT)) - 1) * 100 : 0, DISPONIVEL: 0,
       })),
     } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

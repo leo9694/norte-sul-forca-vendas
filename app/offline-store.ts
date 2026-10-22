@@ -1,4 +1,5 @@
 "use client";
+import { uniqueDraftRevisions } from './draft-backup-model';
 
 export type OfflineRow = Record<string, string | number | null>;
 
@@ -63,12 +64,19 @@ async function writeOfflineDrafts<T>(sellerId: number, drafts: T[]) {
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction([DRAFT_STORE_NAME, DRAFT_HISTORY_STORE], "readwrite");
-      drafts.forEach(draft => {
-        const record = draft as { id?: string; updatedAt?: number; cart?: unknown[] };
-        if (record.id && record.updatedAt && record.cart?.length) {
-          transaction.objectStore(DRAFT_HISTORY_STORE).put({ sellerId, draft });
-        }
-      });
+      const history = transaction.objectStore(DRAFT_HISTORY_STORE);
+      const request = history.index('sellerId').getAll(sellerId);
+      request.onsuccess = () => {
+        type LocalDraft = { id: string; updatedAt: number; backupId?: string; sellerId?: number; cart?: unknown[] };
+        const existing = request.result.map(entry => entry.draft as LocalDraft);
+        const incoming = (drafts as LocalDraft[]).filter(record => record.id && record.updatedAt && record.cart?.length);
+        const unique = uniqueDraftRevisions([...existing, ...incoming]);
+        const oldRecords = new Set(existing);
+        const keys = new Set(unique.map(draft => `${draft.id}:${draft.updatedAt}`));
+        // Compacta apenas cópias de conteúdo equivalente, inclusive as de versões antigas do app.
+        for (const draft of existing) if (!keys.has(`${draft.id}:${draft.updatedAt}`)) history.delete([sellerId, draft.id, draft.updatedAt]);
+        for (const draft of unique) if (!oldRecords.has(draft)) history.put({ sellerId, draft });
+      };
       transaction.objectStore(DRAFT_STORE_NAME).put({ sellerId, drafts, updatedAt: Date.now() });
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error ?? new Error("Não foi possível salvar os rascunhos offline."));
@@ -85,7 +93,7 @@ export async function getOfflineDraftHistory<T>(sellerId: number): Promise<T[]> 
     return await new Promise<T[]>((resolve, reject) => {
       const request = database.transaction(DRAFT_HISTORY_STORE, "readonly")
         .objectStore(DRAFT_HISTORY_STORE).index("sellerId").getAll(sellerId);
-      request.onsuccess = () => resolve(request.result.map(record => record.draft as T));
+      request.onsuccess = () => resolve(uniqueDraftRevisions(request.result.map(record => record.draft)) as T[]);
       request.onerror = () => reject(request.error ?? new Error("Não foi possível consultar o histórico local."));
     });
   } finally { database.close(); }
