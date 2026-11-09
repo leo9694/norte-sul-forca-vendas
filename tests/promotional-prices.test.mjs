@@ -9,6 +9,45 @@ const item = { CODPROD: 100, CODLOCAL: 1010101, CONTROLE: 'A', CODVOL: 'UN', VLR
 const rule = { NUPROMOCAO: 774, DTINICIAL: '09062026 00:00:00', DTFINAL: '30122026 00:00:00', PERCENTUAL: 25, CODEMP: 8, GRUPODESCPROD: 'DESC25', GRUPODESCPARC: '***************', GRUPODESCVEND: '***************' };
 const dataset = (rules = [rule]) => ({ rules, bands: [], partners: [{ CODPARC: 10, GRUPODESCPARC: 'CLIENTE' }], products: [{ CODPROD: 100, GRUPODESCPROD: 'DESC25' }], negotiations: [{ CODTIPVENDA: 23, DESCPROM: 'D' }], parameters: [], seller: 20, sellerGroup: 'VENDEDOR' });
 
+const goldenPromotion = () => ({ ...dataset([{ ...rule, NUPROMOCAO: 778, DTINICIAL: '08112026 00:00:00', DTFINAL: '30112027 00:00:00',
+  CODPARC: 0, CODPROD: 0, CODEMP: 0, CODLOCAL: 0, CODTAB: null, GRUPODESCPARC: 'DESC379', GRUPODESCPROD: 'GOLDEN', PERCENTUAL: 15.59 }]),
+  partners: [{ CODPARC: 1193, GRUPODESCPARC: 'DESC379' }], products: [{ CODPROD: 100, GRUPODESCPROD: 'GOLDEN' }], seller: 4 });
+const goldenContext = { ...context, partner: 1193, company: 1 };
+
+test('promotion 778 applies DESC379/GOLDEN in every company and keeps other groups at the table price', () => {
+  const data = goldenPromotion();
+  for (const company of [1, 8]) {
+    const result = applyPromotions([item], data, { ...goldenContext, company });
+    assert.equal(result[0].promotionId, 778);
+    assert.ok(Math.abs(result[0].promotionalPrice - 84.41) < 1e-8);
+    assert.equal(applyPromotions(result, data, { ...goldenContext, company }), result);
+  }
+  for (const changed of [ { ...data, partners: [{ CODPARC: 1193, GRUPODESCPARC: 'DESC380' }] }, { ...data, products: [{ CODPROD: 100, GRUPODESCPROD: 'OUTRO' }] } ]) {
+    assert.equal(applyPromotions([item], changed, goldenContext)[0].promotionId, 0);
+  }
+});
+
+test('ERP group padding and case differences cannot silently discard the customer/product/seller promotion', () => {
+  const data = goldenPromotion();
+  data.partners[0].GRUPODESCPARC = 'desc379        ';
+  data.products[0].GRUPODESCPROD = 'GOLDEN         ';
+  data.rules[0].GRUPODESCVEND = 'VENDEDOR       ';
+  data.sellerGroup = 'vendedor';
+  const result = applyPromotions([item], data, goldenContext);
+  assert.equal(result[0].promotionId, 778);
+  assert.ok(Math.abs(result[0].promotionalPrice - 84.41) < 1e-8);
+});
+
+test('duplicating the last order for 1193 applies current promotion without touching the original sent order', () => {
+  const source = { id: 'sent-1193', updatedAt: 1, phase: 'review', partner: { CODPARC: 1193 }, cart: [item], companyCode: 1, priceCode: 4, priceName: 'Agro', negotiation: 23 };
+  const original = structuredClone(source);
+  const copy = duplicateOrder(source, source.partner, 4, 'Vendedor');
+  copy.cart = applyPromotions(copy.cart, goldenPromotion(), goldenContext);
+  assert.equal(copy.cart[0].promotionId, 778);
+  assert.ok(Math.abs(promotionUnitPrice(copy.cart[0]) - 84.41) < 1e-8);
+  assert.deepEqual(source, original);
+});
+
 test('applies the existing group/company percentage once and preserves base, quantity and typed adjustment', () => {
   const data = dataset(), cart = [item];
   const result = applyPromotions(cart, data, context);

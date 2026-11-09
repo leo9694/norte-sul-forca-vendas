@@ -1785,6 +1785,15 @@ export function SalesApp() {
             currentSellerName={sellerName || user}
             onNew={openNewOrder}
             onDuplicate={async (draft) => {
+              const targetSeller = Number(draft.sellerId || sellerId);
+              const promotionData = online
+                ? await api<Promotions>(`/api/sankhya/promotions?seller=${targetSeller}`, { cache: 'no-store' })
+                : offlineData?.promotions?.seller === targetSeller ? offlineData.promotions : null;
+              if (!promotionData) throw new Error('Faça uma nova carga para atualizar os descontos antes de duplicar.');
+              draft = { ...draft, cart: applyPromotions(draft.cart, promotionData, {
+                partner: Number(draft.partner.CODPARC), company: Number(draft.companyCode || 0),
+                table: draft.priceCode, negotiation: draft.negotiation,
+              }) };
               await saveDraft(draft);
               setActiveDraft(draft);
               setStartingPartner(draft.partner);
@@ -4360,11 +4369,11 @@ function NewOrderV2({
         if (companyCode !== Number(result.company)) setCompanyCode(Number(result.company));
         setTables(result.tables);
         setNegotiations(result.negotiations);
-        if (!priceCode) {
+        if (!result.tables.some(table => Number(table.CODTAB) === priceCode)) {
           const preferred = result.tables.find((table) => Number(table.CODTAB) === Number(result.partner.CODTAB));
           setPriceCode(Number(preferred?.CODTAB ?? result.tables[0]?.CODTAB ?? 0));
         }
-        if (!negotiation || operation === 6) {
+        if (!result.negotiations.some(item => Number(item.CODTIPVENDA) === negotiation) || operation === 6) {
           const preferred = result.negotiations.find((item) => Number(item.CODTIPVENDA) === (operation === 6 ? 53 : 23));
           setNegotiation(Number(preferred?.CODTIPVENDA ?? result.negotiations[0]?.CODTIPVENDA ?? 0));
         }
