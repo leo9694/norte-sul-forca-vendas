@@ -1,6 +1,8 @@
 import { callSankhya, canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
 import { allocateOrderLots } from "../../../stock-lots";
+import { loadPromotions } from '../../_lib/promotions';
+import { applyPromotions, promotionUnitPrice } from '../../../promotional-prices';
 
 type OrderItem = {
   product: number;
@@ -11,6 +13,9 @@ type OrderItem = {
   location: number;
   control: string;
   priceTable: number;
+  promotionalPrice?: number;
+  promotionId?: number;
+  promotionError?: string;
 };
 
 function sankhyaDateTime(value: unknown) {
@@ -169,6 +174,19 @@ export async function POST(request: Request) {
          AND VLRVENDA > 0
     `);
     const allocatedItems = allocateOrderLots(items, validRows);
+    const promotions = await loadPromotions(session, seller);
+    const pricedItems = applyPromotions(items.map(item => ({ ...item, CODPROD: item.product, CODLOCAL: item.location,
+      CONTROLE: item.control, CODVOL: item.volume, VLRVENDA: item.unitPrice })), promotions,
+      { partner, company, table: priceCode, negotiation });
+    pricedItems.forEach((item, index) => {
+      if (item.promotionError) throw new Error(item.promotionError);
+      const expected = promotionUnitPrice(item);
+      if (!Number.isFinite(Number(items[index].promotionalPrice ?? items[index].unitPrice))
+        || Math.abs(expected - Number(items[index].promotionalPrice ?? items[index].unitPrice)) > 0.005
+        || Number(item.promotionId) !== Number(items[index].promotionId || 0)) {
+        throw new Error(`A promoção do produto ${item.product} mudou. Abra o rascunho para atualizar os valores antes de enviar.`);
+      }
+    });
 
     const today = new Intl.DateTimeFormat("pt-BR", {
       timeZone: "America/Cuiaba",
@@ -210,7 +228,12 @@ export async function POST(request: Request) {
             CONTROLE: { $: item.control || " " },
             CODVOL: { $: item.volume },
             NUTAB: { $: String(item.priceTable) },
-            PERCDESC: { $: String(-Number(item.adjustmentPercent || 0)) },
+            PERCDESC: { $: String((1 - Number(item.promotionalPrice ?? item.unitPrice) / item.unitPrice * (1 + Number(item.adjustmentPercent || 0) / 100)) * 100) },
+            ...(item.promotionId ? {
+              NUPROMOCAO: { $: String(item.promotionId) },
+              PERCDESCPROM: { $: String((1 - Number(item.promotionalPrice) / item.unitPrice) * 100) },
+              PERCDESCDIGITADO: { $: String(-Number(item.adjustmentPercent || 0)) },
+            } : {}),
             VLRUNIT: { $: String(item.unitPrice) },
             IGNOREDESCPROMOQTD: { $: "True" },
           })),

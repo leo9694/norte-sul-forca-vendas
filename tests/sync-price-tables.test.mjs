@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+import { orderBillingFields } from '../app/api/_lib/order-status.ts';
 
 const source = await readFile(new URL('../app/api/sankhya/sync/route.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source.replace(/^import[^\n]+\n/gm, ''), {
@@ -18,12 +19,12 @@ async function load({ tables = [{ CODEMP: 1, CODTAB: 2 }, { CODEMP: 6, CODTAB: 4
     }
     return [];
   };
-  const factory = new Function('executePage', 'requireSession', 'readAllQueryRows', 'priceInheritanceCtes',
+  const factory = new Function('executePage', 'requireSession', 'readAllQueryRows', 'priceInheritanceCtes', 'orderBillingFields', 'loadPromotions',
     js.replace('export async function GET', 'return async function GET'));
   const GET = factory(executePage, async () => {
     if (expired) throw new Error('AUTH_REQUIRED');
     return { sellerId: 10 };
-  }, (query, sql) => query(sql), () => 'HERANCA_PRECOS AS (SELECT 1 FROM DUAL)');
+  }, (query, sql) => query(sql), () => 'HERANCA_PRECOS AS (SELECT 1 FROM DUAL)', orderBillingFields, async () => ({ rules: [] }));
   const response = await GET(new Request('http://local/api/sankhya/sync'));
   return { queries, response, body: await response.json() };
 }

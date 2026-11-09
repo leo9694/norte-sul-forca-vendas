@@ -1,10 +1,12 @@
 "use client";
 import { uniqueDraftRevisions } from './draft-backup-model';
+import type { Promotions } from './promotional-prices';
 
 export type OfflineRow = Record<string, string | number | null>;
 
 export type OfflineSnapshot = {
   version: 1;
+  promotions?: Promotions;
   syncedAt: number;
   seller: {
     user: string;

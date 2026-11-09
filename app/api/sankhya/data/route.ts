@@ -1,5 +1,6 @@
 import { canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
+import { linkedInvoiceQuery, orderBillingFields } from '../../_lib/order-status';
 
 const numeric = (value: string | null, fallback = 0) => {
   const parsed = Number(value);
@@ -224,17 +225,13 @@ export async function GET(request: Request) {
       const periodFilter = `
         AND (
           (EXISTS (
-            SELECT 1 FROM TGFVAR V
-            JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
-            WHERE V.NUNOTAORIG = C.NUNOTA
+            SELECT 1 ${linkedInvoiceQuery()}
               AND F.DTENTSAI >= ${startExpression}
               AND F.DTENTSAI < ${endExpression}
           ))
           OR (
             NOT EXISTS (
-              SELECT 1 FROM TGFVAR V
-              JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
-              WHERE V.NUNOTAORIG = C.NUNOTA
+              SELECT 1 ${linkedInvoiceQuery()}
             )
             AND C.DTNEG >= ${startExpression}
             AND C.DTNEG < ${endExpression}
@@ -244,17 +241,9 @@ export async function GET(request: Request) {
       const rows = await executeQuery(session, `
         SELECT * FROM (
           SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI,
-                 (SELECT MAX(F.DTENTSAI)
-                    FROM TGFVAR V
-                    JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
-                   WHERE V.NUNOTAORIG = C.NUNOTA) DTFAT,
+                 ${orderBillingFields()},
                  C.VLRNOTA,
-                 C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC,
-                 CASE WHEN EXISTS (
-                   SELECT 1 FROM TGFVAR V
-                   JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
-                   WHERE V.NUNOTAORIG = C.NUNOTA
-                 ) THEN 'S' ELSE 'N' END FATURADO
+                 C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC
            FROM TGFCAB C
             JOIN TGFPAR P ON P.CODPARC = C.CODPARC
            WHERE C.CODTIPOPER IN (5, 6) AND C.TIPMOV = 'P'

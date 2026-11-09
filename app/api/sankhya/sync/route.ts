@@ -1,6 +1,8 @@
 import { executeQuery as executePage, requireSession, type SankhyaSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
 import { readAllQueryRows } from "../../_lib/query-pagination";
+import { orderBillingFields } from '../../_lib/order-status';
+import { loadPromotions } from '../../_lib/promotions';
 
 const executeQuery = (session: SankhyaSession, sql: string) =>
   readAllQueryRows(page => executePage(session, page), sql);
@@ -23,7 +25,7 @@ export async function GET(request: Request) {
     `;
     const tables = await executeQuery(session, `${customerTablesSql} ORDER BY CODEMP, NOMETAB, CODTAB`);
 
-    const [clients, partnerCompanies, orders, negotiations, operations, products, productGroups] = await Promise.all([
+    const [clients, partnerCompanies, orders, negotiations, operations, products, productGroups, promotions] = await Promise.all([
       executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
                EN.NOMEEND ENDERECO, P.NUMEND, P.COMPLEMENTO, B.NOMEBAI BAIRRO, P.CEP,
@@ -64,17 +66,9 @@ export async function GET(request: Request) {
       `),
       executeQuery(session, `
         SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI,
-               (SELECT MAX(F.DTENTSAI)
-                  FROM TGFVAR V
-                  JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
-                 WHERE V.NUNOTAORIG = C.NUNOTA) DTFAT,
+               ${orderBillingFields()},
                C.VLRNOTA,
-               C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC,
-               CASE WHEN EXISTS (
-                 SELECT 1 FROM TGFVAR V
-                 JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA AND F.TIPMOV <> 'P'
-                 WHERE V.NUNOTAORIG = C.NUNOTA
-               ) THEN 'S' ELSE 'N' END FATURADO
+               C.STATUSNOTA, C.CODTIPOPER, C.PENDENTE, C.CODPARC, P.NOMEPARC
           FROM TGFCAB C
           JOIN TGFPAR P ON P.CODPARC = C.CODPARC
          WHERE C.CODTIPOPER IN (5, 6)
@@ -173,10 +167,12 @@ export async function GET(request: Request) {
          WHERE ATIVO = 'S'
          ORDER BY GRAU, DESCRGRUPOPROD, CODGRUPOPROD
       `),
+      loadPromotions(session),
     ]);
 
     return Response.json({
       version: 1,
+      promotions,
       syncedAt: Date.now(),
       seller: {
         user: session.user,

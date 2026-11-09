@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { clientOrderHistory, clientDetailDate } from '../app/client-details-model.ts';
+import { orderBillingFields } from '../app/api/_lib/order-status.ts';
 
 test('offline history only includes this client, de-duplicates refreshed orders and keeps newest first', () => {
   const orders = clientOrderHistory([
@@ -24,7 +25,7 @@ function service(found = true) {
   const queries = [], paginated = [];
   const query = async (_session, sql) => { queries.push(sql); return sql.includes('FROM TGFPAR P') ? found ? [{ CODPARC: 10198, CODVEND: 123 }] : [] : [{ result: 'row' }]; };
   const readAll = async (query, sql) => { paginated.push(sql); return query(sql); };
-  return { load: new Function('executeQuery', 'readAllQueryRows', js + ';return loadClientDetails;')(query, readAll), queries, paginated };
+  return { load: new Function('executeQuery', 'readAllQueryRows', 'orderBillingFields', js + ';return loadClientDetails;')(query, readAll, orderBillingFields), queries, paginated };
 }
 test('only loads contacts and complete order history after verifying the client belongs to the seller', async () => {
   const denied = service(false);

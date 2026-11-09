@@ -1,5 +1,6 @@
 import { callSankhya, canAnalyzeOtherSellers, downloadSankhyaFile, executeQuery, requireSession, type SankhyaSession } from "../../_lib/sankhya";
 import { normalizeOrderDocuments, publicDocumentError } from "../../_lib/order-documents.js";
+import { invoiceCondition } from '../../_lib/order-status';
 
 type Row = Record<string, unknown>;
 
@@ -79,7 +80,7 @@ async function storedBoleto(session: SankhyaSession, nunota: number) {
 async function noteByNunota(session: SankhyaSession, nunota: number) {
   const rows = await executeQuery(session, `
     SELECT C.NUNOTA, C.NUMNOTA, C.SERIENOTA, C.CODEMP, C.CODPARC, P.NOMEPARC,
-           C.CODVEND, C.TIPMOV, C.VLRNOTA, C.DTNEG, C.STATUSNOTA, C.STATUSNFE,
+           C.CODVEND, C.CODTIPOPER, C.TIPMOV, C.VLRNOTA, C.DTNEG, C.STATUSNOTA, C.STATUSNFE,
            (SELECT MAX(N.CHAVENFE) FROM TGFNFE N WHERE N.NUNOTA = C.NUNOTA) CHAVENFE,
            CASE WHEN EXISTS (SELECT 1 FROM TGFNFE N WHERE N.NUNOTA = C.NUNOTA AND N.XML IS NOT NULL) THEN 'S' ELSE 'N' END POSSUIXML,
            (SELECT MIN(F.DTVENC) FROM TGFFIN F WHERE F.NUNOTA = C.NUNOTA) DTVENC
@@ -90,7 +91,7 @@ async function noteByNunota(session: SankhyaSession, nunota: number) {
   return rows[0] as Row | undefined;
 }
 
-async function resolveInvoice(session: SankhyaSession, requestedNunota: number, requestedKey: string) {
+async function resolveInvoice(session: SankhyaSession, requestedNunota: number, requestedKey: string, action: string) {
   if (requestedKey) {
     const rows = await executeQuery(session, `
       SELECT N.NUNOTA
@@ -112,7 +113,9 @@ async function resolveInvoice(session: SankhyaSession, requestedNunota: number, 
         FROM TGFVAR V
         JOIN TGFCAB DEST ON DEST.NUNOTA = V.NUNOTA
        WHERE V.NUNOTAORIG = ${requestedNunota}
-         AND DEST.TIPMOV <> 'P'
+         AND ${invoiceCondition('DEST')}
+         ${action === 'danfe' || action === 'xml' ? "AND DEST.STATUSNFE='A' AND EXISTS (SELECT 1 FROM TGFNFE N WHERE N.NUNOTA=DEST.NUNOTA AND LENGTH(TRIM(N.CHAVENFE))=44)" : ''}
+         ${action === 'boleto' ? "AND EXISTS (SELECT 1 FROM TGFFIN FIN WHERE FIN.NUNOTA=DEST.NUNOTA AND FIN.DHBAIXA IS NULL AND NVL(FIN.VLRBAIXA,0)<=0 AND FIN.CODCTABCOINT>0)" : ''}
        ORDER BY DEST.NUNOTA DESC
     ) WHERE ROWNUM = 1
   `);
@@ -159,9 +162,9 @@ async function danfe(session: SankhyaSession, nunota: number) {
   return validatedPdf(stored);
 }
 
-async function boleto(session: SankhyaSession, invoiceNunota: number, nufin?: number) {
+async function boleto(session: SankhyaSession, invoiceNunota: number, nufin?: number, cachedTitles?: Row[]) {
   try {
-    const titles = await financialTitles(session, invoiceNunota);
+    const titles = cachedTitles || await financialTitles(session, invoiceNunota);
     const selectedTitles = titles.filter((item) => (!nufin || Number(item.NUFIN) === nufin)
       && !item.DHBAIXA && Number(item.VLRBAIXA || 0) <= 0 && Number(item.CODCTABCOINT || 0) > 0);
     const title = selectedTitles[0];
@@ -238,8 +241,9 @@ export async function GET(request: Request) {
       return Response.json({ error: "Informe um pedido/nota e uma ação válidos." }, { status: 400 });
     }
 
-    const invoice = await resolveInvoice(session, nunota, key);
+    let invoice = await resolveInvoice(session, nunota, key, action);
     await assertPermission(session, nunota, invoice);
+    if (invoice && !(invoice.STATUSNOTA === 'L' && invoice.TIPMOV === 'V' && [35, 10].includes(Number(invoice.CODTIPOPER)))) invoice = null;
     if (invoice === undefined) return Response.json({ error: "Pedido ou nota não encontrado." }, { status: 404 });
     if (invoice === null) {
       return action === "info"
@@ -248,9 +252,10 @@ export async function GET(request: Request) {
     }
     const invoiceNunota = Number(invoice.NUNOTA);
 
-    if (action === "info") {
-      return Response.json(normalizeOrderDocuments(invoice, await financialTitles(session, invoiceNunota)));
-    }
+    const titles = action === 'info' || action === 'boleto' ? await financialTitles(session, invoiceNunota) : [];
+    const documents = normalizeOrderDocuments(invoice, titles);
+    if (action === "info") return Response.json(documents);
+    if ((action === 'danfe' || action === 'xml') && !documents.nfe.available) throw new Error('DOCUMENT_NOT_AVAILABLE');
     if (action === "danfe") {
       const file = await danfe(session, invoiceNunota);
       return new Response(file.buffer, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="danfe-${invoiceNunota}.pdf"`, "Cache-Control": "private, no-store" } });
@@ -263,7 +268,8 @@ export async function GET(request: Request) {
     const requestedNufin = url.searchParams.get("nufin");
     const nufin = requestedNufin ? positiveInteger(requestedNufin) : undefined;
     if (requestedNufin && !nufin) return Response.json({ error: "Título financeiro inválido." }, { status: 400 });
-    const file = await boleto(session, invoiceNunota, nufin);
+    if (!documents.boletos.some((title: { available: boolean; nufin: number }) => title.available && (!nufin || title.nufin === nufin))) throw new Error('DOCUMENT_NOT_AVAILABLE');
+    const file = await boleto(session, invoiceNunota, nufin, titles);
     return new Response(file.buffer, { headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="boleto-${nufin || invoiceNunota}.pdf"`, "Cache-Control": "private, no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

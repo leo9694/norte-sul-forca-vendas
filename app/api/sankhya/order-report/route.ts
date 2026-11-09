@@ -34,7 +34,8 @@ export async function GET(request: Request) {
     const items = await readAllQueryRows(sql => executeQuery(session, sql), `
       SELECT I.CODPROD, P.DESCRPROD, P.REFERENCIA, I.CODVOL,
              I.CODLOCALORIG CODLOCAL, I.CONTROLE, I.NUTAB,
-             I.QTDNEG, I.VLRUNIT, I.VLRTOT, NVL(I.VLRDESC,0) VLRDESC
+             I.QTDNEG, I.VLRUNIT, I.VLRTOT, NVL(I.VLRDESC,0) VLRDESC,
+             I.NUPROMOCAO, I.PERCDESCPROM, I.PERCDESCDIGITADO
         FROM TGFITE I JOIN TGFPRO P ON P.CODPROD = I.CODPROD
        WHERE I.NUNOTA = ${id} AND I.SEQUENCIA > 0 ORDER BY I.SEQUENCIA
     `);
@@ -53,7 +54,8 @@ export async function GET(request: Request) {
       negotiationName: String(header.DESCRTIPVENDA || ""), observation: String(header.OBSERVACAO || ""),
       cart: items.map(item => ({ ...item, quantity: Number(item.QTDNEG),
         VLRVENDA: duplicate ? Number(item.VLRUNIT) : Number(item.QTDNEG) > 0 ? (Number(item.VLRTOT) - Number(item.VLRDESC)) / Number(item.QTDNEG) : Number(item.VLRUNIT),
-        adjustmentPercent: duplicate && Number(item.QTDNEG) * Number(item.VLRUNIT) > 0 ? ((Number(item.VLRTOT) - Number(item.VLRDESC)) / (Number(item.QTDNEG) * Number(item.VLRUNIT)) - 1) * 100 : 0, DISPONIVEL: 0,
+        adjustmentPercent: duplicate && Number(item.NUPROMOCAO) > 0 ? -Number(item.PERCDESCDIGITADO || 0)
+          : duplicate && Number(item.QTDNEG) * Number(item.VLRUNIT) > 0 ? ((Number(item.VLRTOT) - Number(item.VLRDESC)) / (Number(item.QTDNEG) * Number(item.VLRUNIT)) - 1) * 100 : 0, DISPONIVEL: 0,
       })),
     } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

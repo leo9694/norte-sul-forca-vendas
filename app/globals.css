@@ -365,6 +365,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .order-top-badge { padding: 7px 13px; border: 2px solid #d3eadf; border-radius: 999px; color: var(--green); font-size: 16px; font-weight: 850; }
 .order-card-rich .status { padding: 13px 18px; border-radius: 13px; font-size: 16px; }
 .order-rich-actions { display: flex; align-items: center; gap: 8px; }
+.order-status-group { display: grid; justify-items: end; gap: 5px; min-width: 0; }
+.order-status-group > small { max-width: 180px; color: var(--muted); font-size: 9px; text-align: right; line-height: 1.4; }
+.order-card-rich .order-status-group > .status { max-width: 180px; white-space: normal; line-height: 1.4; text-align: center; }
 .order-document-links { display: flex; gap: 7px; padding: 6px; border: 1px solid #cde8d8; border-radius: 11px; background: #f5fbf8; }
 .order-document-links button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 10px; border: 1px solid var(--green); border-radius: 8px; background: white; color: var(--green); font-size: 10px; font-weight: 800; white-space: nowrap; cursor: pointer; }
 .order-document-links button:hover { background: var(--green-soft); }
@@ -1309,6 +1312,8 @@ textarea:focus { border-color: var(--green); }
   .order-card-rich .order-code { padding: 4px 6px; border-radius: 5px; font-size: 10px; }
   .order-top-badge { padding: 3px 6px; border-width: 1px; font-size: 9px; }
   .order-card-rich .status { grid-column: 2; grid-row: 3; align-self: center; padding: 6px 8px; font-size: 10px; }
+  .order-status-group { grid-column: 2; grid-row: 3; align-self: center; max-width: 160px; }
+  .order-card-rich .order-status-group > .status { grid-column: auto; grid-row: auto; }
   .order-card-rich .status svg { width: 14px; height: 14px; }
   .order-rich-head > .order-client { grid-column: 1 / -1; grid-row: 1; }
   .order-card-rich .sent-order-actions { position: absolute; top: 7px; right: 7px; }

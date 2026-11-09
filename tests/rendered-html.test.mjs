@@ -276,7 +276,9 @@ assert.match(ordersScreen, /order-rich-meta/);
   assert.match(ordersScreen, /Abrir boleto<\/button>/);
   assert.match(ordersScreen, /window\.open\("about:blank", "_blank"\)/);
   assert.match(ordersScreen, /URL\.createObjectURL\(new Blob\(\[bytes\], \{ type: "application\/pdf" \}\)\)/);
-  assert.match(ordersScreen, /String\(order\.FATURADO\) !== "S"/);
+  assert.match(ordersScreen, /!canDownloadOrderNfe\(order\)/);
+  assert.match(ordersScreen, /!canDownloadOrderBoleto\(order\)/);
+  assert.match(ordersScreen, /isOrderBilled\(order\)/);
   assert.match(ordersScreen, /Number\(order\.CODTIPOPER\) === 6 \? "Bonificação" : "Pedido de venda"/);
   assert.match(ordersScreen, /order\.NUNOTA[\s\S]*?order\.NUMNOTA[\s\S]*?order\.CODPARC[\s\S]*?order\.NOMEPARC/);
   assert.match(ordersScreen, /Buscar pedido, cliente ou código/);
@@ -285,9 +287,10 @@ assert.match(ordersScreen, /order-rich-meta/);
   assert.match(dataSource, /kind === "orders"[\s\S]*?AND C\.DTNEG >= \$\{startExpression\}/);
   assert.match(dataSource, /kind === "orders"[\s\S]*?C\.CODTIPOPER IN \(5, 6\)/);
   assert.match(syncSource, /C\.CODTIPOPER IN \(5, 6\)/);
-  assert.match(syncSource, /DTFAT/);
+  assert.match(syncSource, /orderBillingFields/);
   assert.match(dataSource, /C\.DTENTSAI[\s\S]*C\.CODTIPOPER/);
-  assert.match(dataSource, /TGFVAR V[\s\S]*THEN 'S' ELSE 'N' END FATURADO/);
+  assert.match(dataSource, /orderBillingFields/);
+  assert.doesNotMatch(ordersScreen, /★ TOP/);
   assert.match(styleSource, /@media \(max-width: 360px\)[\s\S]*\.order-card-rich/);
   assert.match(styleSource, /\.order-rich-meta \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.match(clientsScreen, /Consultar carteira do vendedor/);
@@ -483,7 +486,9 @@ test("sends orders through an authenticated Sankhya service session", async () =
   assert.match(orderSource, /P\.AGRUPMIN/);
   assert.match(orderSource, /allocateOrderLots\(items, validRows\)/);
   assert.match(await readFile(path.join(projectRoot, "app", "stock-lots.ts"), "utf8"), /múltiplos de \$\{grouping\}/);
-  assert.match(orderSource, /PERCDESC:\s*\{ \$: String\(-Number\(item\.adjustmentPercent \|\| 0\)\) \}/);
+  assert.match(orderSource, /PERCDESC:\s*\{ \$: String\(\(1 - Number\(item\.promotionalPrice \?\? item\.unitPrice\)/);
+  assert.match(orderSource, /loadPromotions\(session, seller\)/);
+  assert.match(orderSource, /NUPROMOCAO: \{ \$: String\(item\.promotionId\) \}/);
   assert.match(orderSource, /desconto ou acréscimo percentual inválido/);
   assert.match(orderSource, /CODNAT:\s*\{\s*\$:\s*"1010000"\s*\}/);
 });
@@ -492,7 +497,7 @@ test("normalizes an authorized NF-e with an available boleto", () => {
   const result = normalizeOrderDocuments({
     NUNOTA: 900, NUMNOTA: 123, SERIENOTA: 1, CODEMP: 6, CODPARC: 10,
     NOMEPARC: "CLIENTE", VLRNOTA: 250, STATUSNOTA: "L", STATUSNFE: "A",
-    CHAVENFE: "1".repeat(44), POSSUIXML: "S",
+    CHAVENFE: "1".repeat(44), POSSUIXML: "S", CODTIPOPER: 35, TIPMOV: 'V',
   }, [{ NUFIN: 80, VLRDESDOB: 250, DTVENC: "10/09/2026", CODCTABCOINT: 2, NOMEBCO: "BANCO" }]);
 
   assert.equal(result.nfe.available, true);
@@ -501,7 +506,7 @@ test("normalizes an authorized NF-e with an available boleto", () => {
 });
 
 test("keeps every installment linked to an invoice", () => {
-  const result = normalizeOrderDocuments({ NUNOTA: 900 }, [
+  const result = normalizeOrderDocuments({ NUNOTA: 900, STATUSNOTA: 'L', CODTIPOPER: 35, TIPMOV: 'V' }, [
     { NUFIN: 1, VLRDESDOB: 100, CODCTABCOINT: 2 },
     { NUFIN: 2, VLRDESDOB: 150, CODCTABCOINT: 2 },
   ]);
@@ -509,7 +514,7 @@ test("keeps every installment linked to an invoice", () => {
 });
 
 test("handles an invoice without boleto", () => {
-  const result = normalizeOrderDocuments({ NUNOTA: 900 }, []);
+  const result = normalizeOrderDocuments({ NUNOTA: 900, STATUSNOTA: 'L', CODTIPOPER: 10, TIPMOV: 'V' }, []);
   assert.equal(result.billed, true);
   assert.deepEqual(result.boletos, []);
 });

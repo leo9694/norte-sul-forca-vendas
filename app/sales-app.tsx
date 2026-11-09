@@ -50,12 +50,14 @@ import { FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef,
 import { readDraftRecords, writeDraftRecord } from "./draft-journal";
 import { createDraftBackupSync } from "./draft-backup-sync";
 import { refreshDraftPrices } from "./draft-prices";
+import { applyPromotions, promotionUnitPrice, type Promotions } from './promotional-prices';
 import { compareLotExpiry } from "./stock-lots";
 import { ClientRegistrationForm } from "./client-registration-form";
 import { RegistrationFeedbackPanel } from "./registration-feedback-panel";
 import { ClientDetailsPanel } from "./client-details-panel";
 import { DuplicateOrderPanel } from "./duplicate-order-panel";
 import { draftBackupContent, draftBackupIdentity, groupDraftBackups } from './draft-backup-model';
+import { canDownloadOrderBoleto, canDownloadOrderNfe, isOrderBilled, orderConferenceLabel } from './order-status';
 import {
   getOfflineDrafts,
   getOfflineDraftHistory,
@@ -98,7 +100,7 @@ type ProductLot = ApiRow & {
   RESERVADO: number;
   DISPONIVEL: number;
 };
-type CartItem = Product & { quantity: number; adjustmentPercent?: number };
+type CartItem = Product & { quantity: number; adjustmentPercent?: number; promotionId?: number; promotionalPrice?: number; promotionError?: string };
 type PriceTable = { CODEMP?: number; CODTAB: number; NOMETAB: string };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
 type OrderOperation = { CODTIPOPER: number; DESCROPER: string };
@@ -261,8 +263,8 @@ const itemAdjustment = (item: Pick<CartItem, "adjustmentPercent">) => {
   const value = Number(item.adjustmentPercent || 0);
   return Number.isFinite(value) ? value : 0;
 };
-const adjustedUnitPrice = (item: Pick<CartItem, "VLRVENDA" | "adjustmentPercent">) =>
-  Number(item.VLRVENDA) * (1 + itemAdjustment(item) / 100);
+const adjustedUnitPrice = (item: Pick<CartItem, "VLRVENDA" | "adjustmentPercent" | "promotionalPrice">) =>
+  promotionUnitPrice(item) * (1 + itemAdjustment(item) / 100);
 const cartItemTotal = (item: CartItem) => adjustedUnitPrice(item) * item.quantity;
 const cartTotal = (cart: CartItem[]) => cart.reduce((sum, item) => sum + cartItemTotal(item), 0);
 
@@ -290,7 +292,7 @@ const currentMonthStart = () => {
 
 const displayPeriodDate = (value: string) => value.split("-").reverse().join("/");
 
-const orderPeriodDate = (order: ApiRow) => String(order.FATURADO) === "S" ? order.DTFAT : order.DTNEG;
+const orderPeriodDate = (order: ApiRow) => isOrderBilled(order) ? order.DTFAT : order.DTNEG;
 
 const filterOrdersByPeriod = (rows: ApiRow[], dateFrom: string, dateTo: string) =>
   rows.filter((order) => {
@@ -1519,6 +1521,17 @@ export function SalesApp() {
       setDrafts(next);
       void persistDraftsLocally(next).catch(() => {});
   };
+
+  useEffect(() => {
+    const data = offlineData?.promotions;
+    if (!draftsReady || !data || data.seller !== sellerId) return;
+    for (const draft of draftsRef.current) {
+      if (Number(draft.sellerId || sellerId) !== sellerId || !draft.companyCode || !draft.priceCode) continue;
+      const base = refreshDraftPrices(draft.cart, offlineData.products, draft.companyCode, draft.priceCode);
+      const cart = applyPromotions(base, data, { partner: Number(draft.partner.CODPARC), company: draft.companyCode, table: draft.priceCode, negotiation: draft.negotiation });
+      if (cart !== draft.cart) void saveDraft({ ...draft, cart, updatedAt: Date.now() }).catch(() => {});
+    }
+  }, [offlineData, draftsReady, sellerId]);
 
   useEffect(() => {
     if (!authenticated || !online || !draftsReady || !userId) return;
@@ -2983,7 +2996,7 @@ function OrdersScreen({
     || currentSellerName;
   const filtered = orders.filter((order) => {
     const matchesSearch = `${order.NUNOTA} ${order.NUMNOTA} ${order.CODPARC} ${order.NOMEPARC}`.toLowerCase().includes(query.toLowerCase());
-    const state = order.STATUSNOTA === "L" ? "Enviados" : "Aguardando";
+    const state = isOrderBilled(order) ? "Faturados" : "Aguardando";
     return matchesSearch && filter !== "Rascunhos" && (filter === "Todos" || filter === state);
   });
   const filteredDrafts = drafts.filter((draft) => {
@@ -3014,6 +3027,7 @@ function OrdersScreen({
           items: draftPendingSend.cart.map((item) => ({
             product: Number(item.CODPROD), quantity: item.quantity, unitPrice: Number(item.VLRVENDA),
             adjustmentPercent: itemAdjustment(item),
+            promotionId: item.promotionId, promotionalPrice: item.promotionalPrice,
             volume: item.CODVOL, location: Number(item.CODLOCAL), control: item.CONTROLE, priceTable: Number(item.NUTAB),
           })),
         }),
@@ -3180,14 +3194,14 @@ function OrdersScreen({
       )}
 
       <div className="filter-chips">
-        {["Todos", "Enviados", "Rascunhos", "Aguardando"].map((item) => (
+        {["Todos", "Faturados", "Rascunhos", "Aguardando"].map((item) => (
           <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item}</button>
         ))}
       </div>
 
       <section className="metrics">
         <Metric icon={<CircleDollarSign />} label="Total em carteira" value={money(total)} />
-        <Metric icon={<Send />} label="Enviados" value={String(orders.filter((o) => o.STATUSNOTA === "L").length)} />
+        <Metric icon={<Send />} label="Faturados" value={String(orders.filter(isOrderBilled).length)} />
         <Metric blue icon={<FileText />} label="Rascunhos" value={String(filteredDrafts.length)} />
       </section>
 
@@ -3233,15 +3247,15 @@ function OrdersScreen({
               <span className="order-icon">{index % 2 ? <Leaf /> : <Building2 />}</span>
               <div className="order-rich-content">
                 <div className="order-rich-head">
-                  <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">★ TOP {String(order.CODTIPOPER || 5)} · {Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
+                  <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">{Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
                   <div className="order-rich-actions">
                     <div className="order-document-links">
-                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir DANFE em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
-                      <button disabled={!online || String(order.FATURADO) !== "S" || openingOrderDocument !== null} title={String(order.FATURADO) === "S" ? "Abrir boleto em outra aba" : "Disponível após o faturamento"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
+                      <button disabled={!online || !canDownloadOrderNfe(order) || openingOrderDocument !== null} title={canDownloadOrderNfe(order) ? "Abrir DANFE em outra aba" : "Disponível após confirmação da nota e autorização da NF-e"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
+                      <button disabled={!online || !canDownloadOrderBoleto(order) || openingOrderDocument !== null} title={canDownloadOrderBoleto(order) ? "Abrir boleto em outra aba" : "Disponível após confirmação da nota, com boleto pendente"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
                     </div>
-                    <span className={`status ${order.STATUSNOTA === "L" ? "sent" : "waiting"}`}>
-                      {order.STATUSNOTA === "L" ? <><Send size={18} /> Enviado</> : <>Aguardando</>}
-                    </span>
+                    <div className="order-status-group"><span className={`status ${isOrderBilled(order) ? "sent" : "waiting"}`}>
+                      {isOrderBilled(order) ? <><CheckCircle2 size={18} /> Faturado</> : orderConferenceLabel(order)}
+                    </span>{isOrderBilled(order) && order.STATUS_CONFERENCIA && <small>Conferência: {orderConferenceLabel(order)}</small>}</div>
                     <div className={`draft-actions sent-order-actions${draftMenuId === `pedido-${order.NUNOTA}` ? " menu-open" : ""}`} onClick={(event) => event.stopPropagation()}>
                       <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}><MoreVertical size={20} /></button>
                       {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
@@ -3256,7 +3270,7 @@ function OrdersScreen({
                 <div className="order-rich-meta">
                   <span><CalendarDays size={22} /><span><small>Data da negociação</small>{sankhyaDate(order.DTNEG)}</span></span>
                   <i />
-                  <span><FileText size={22} /><span><small>Data do faturamento</small>{String(order.FATURADO) === "S" ? sankhyaDate(order.DTFAT) : "—"}</span></span>
+                  <span><FileText size={22} /><span><small>Data do faturamento</small>{isOrderBilled(order) ? sankhyaDate(order.DTFAT) : "—"}</span></span>
                 </div>
                 <div className="order-rich-total">{money(Number(order.VLRNOTA || 0))}</div>
               </div>
@@ -4014,6 +4028,26 @@ function NewOrderV2({
   const [negotiation, setNegotiation] = useState(Number(draft?.negotiation || 0));
   const [observation, setObservation] = useState(draft?.observation ?? "");
   const [cart, setCart] = useState<CartItem[]>(draft?.cart ?? []);
+  const [promotions, setPromotions] = useState<Promotions | null>(null);
+  const [promotionsError, setPromotionsError] = useState('');
+  useEffect(() => {
+    let active = true;
+    setPromotions(null);
+    setPromotionsError('');
+    if (!online) {
+      if (offlineData?.promotions?.seller === actingSellerId) setPromotions(offlineData.promotions);
+      else setPromotionsError('Faça uma nova carga para obter os descontos promocionais antes de continuar.');
+      return;
+    }
+    api<Promotions>(`/api/sankhya/promotions?seller=${actingSellerId}`)
+      .then(data => { if (active) setPromotions(data); })
+      .catch(() => { if (active) setPromotionsError('Não foi possível atualizar as promoções. Reabra o pedido para tentar novamente.'); });
+    return () => { active = false; };
+  }, [online, actingSellerId, offlineData]);
+  useEffect(() => {
+    if (!promotions) return;
+    setCart(current => applyPromotions(current, promotions, { partner: Number(partner.CODPARC), company: companyCode, table: priceCode, negotiation }));
+  }, [promotions, cart, companyCode, priceCode, negotiation, partner.CODPARC]);
   const [brand, setBrand] = useState("");
   const [pendingBrand, setPendingBrand] = useState("");
   const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
@@ -4050,6 +4084,13 @@ function NewOrderV2({
     : negotiations;
   const total = useMemo(() => cartTotal(cart), [cart]);
   const totalUnits = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const promotionalProduct = (product: Product) => {
+    if (!promotions) return product;
+    const existing = cart.find(item => item.CODPROD === product.CODPROD);
+    const preview = existing || { ...product, quantity: Number(product.AGRUPMIN || 1) };
+    return applyPromotions([...cart.filter(item => item !== existing), preview], promotions,
+      { partner: Number(partner.CODPARC), company: companyCode, table: priceCode, negotiation }).at(-1)!;
+  };
 
   const goToPhase = (nextPhase: OrderPhase) => {
     if (nextPhase === phase) return;
@@ -4623,6 +4664,10 @@ function NewOrderV2({
   };
 
   const sendOrder = async () => {
+    if (!promotions || promotionsError || cart.some(item => item.promotionError)) {
+      setError(promotionsError || cart.find(item => item.promotionError)?.promotionError || 'Aguarde a atualização dos descontos promocionais.');
+      return;
+    }
     if (!online) {
       setError("O pedido foi mantido como rascunho. Conecte-se à internet para enviar ao Sankhya.");
       setShowConfirm(false);
@@ -4652,6 +4697,7 @@ function NewOrderV2({
             quantity: item.quantity,
             unitPrice: Number(item.VLRVENDA),
             adjustmentPercent: itemAdjustment(item),
+            promotionId: item.promotionId, promotionalPrice: item.promotionalPrice,
             volume: item.CODVOL,
             location: Number(item.CODLOCAL),
             control: item.CONTROLE,
@@ -4791,7 +4837,7 @@ function NewOrderV2({
                     <article key={product.CODPROD} className={quantityOf(product) ? "selected" : ""}>
                       <button className="product-icon product-image-button" onClick={() => setProductImagePreview(product)} aria-label={`Ampliar imagem de ${product.DESCRPROD}`}><Sprout size={22} /><img src={productImageUrl(product)} alt="" onError={(event) => event.currentTarget.remove()} /></button>
                       <div className="product-info"><button className="product-name-button" onClick={() => openProductDetails(product)} title={`Ver lotes de ${product.DESCRPROD}`}><strong>{product.CODPROD} - {product.DESCRPROD}</strong></button><small>Cód. {product.CODPROD} · {product.CODVOL}{product.MARCA ? ` · ${product.MARCA}` : ""}</small><span className="product-stock"><PackageCheck size={14} /><strong>{Number(product.DISPONIVEL).toLocaleString("pt-BR")}</strong> disponíveis</span></div>
-                      <div className="product-price"><strong>{money(Number(product.VLRVENDA))}</strong><small>por {product.CODVOL}</small></div>
+                      <div className="product-price"><strong>{money(promotionUnitPrice(promotionalProduct(product)))}</strong><small>por {product.CODVOL}{promotionalProduct(product).promotionId ? ' · Promoção' : ''}</small></div>
                       {quantityOf(product) ? (
                         <div className="product-order-controls"><div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div><label className="item-adjustment"><span>− Desc. / + Acrésc.</span><input key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}-${itemAdjustment(cartItemOf(product) || { adjustmentPercent: 0 })}`} type="text" inputMode="decimal" title="Use negativo para desconto e positivo para acréscimo" defaultValue={itemAdjustment(cartItemOf(product) || { adjustmentPercent: 0 }).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(product, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${product.DESCRPROD}`} /><b>%</b></label></div>
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
@@ -4816,6 +4862,8 @@ function NewOrderV2({
             {!online && <div className="offline-order-notice"><CloudOff size={20} /><span><strong>Rascunho salvo offline</strong><small>Conecte-se à internet para validar os dados atuais e enviar ao Sankhya.</small></span></div>}
           </section>
         )}
+        {promotionsError && <div className="global-error">{promotionsError}</div>}
+        {cart.find(item => item.promotionError)?.promotionError && <div className="global-error">{cart.find(item => item.promotionError)?.promotionError}</div>}
         {error && <div className="global-error">{error}</div>}
       </div>
 
@@ -4918,7 +4966,7 @@ function NewOrderV2({
             <button className="modal-close" onClick={() => setProductDetails(null)} aria-label="Fechar detalhes"><X size={20} /></button>
             <div className="product-details-hero">
               <button className="product-details-image" onClick={() => { setProductImagePreview(productDetails); setProductDetails(null); }} aria-label={`Ampliar imagem de ${productDetails.DESCRPROD}`}><Sprout size={28} /><img src={productImageUrl(productDetails)} alt="" onError={(event) => event.currentTarget.remove()} /></button>
-              <header><span className="eyebrow">Detalhes do produto</span><h2>{productDetails.DESCRPROD}</h2><p>Cód. {productDetails.CODPROD} · {productDetails.CODVOL}{productLots[0]?.REFERENCIA ? ` · Ref. ${productLots[0].REFERENCIA}` : ""}</p><strong className="product-details-price">{money(Number(productDetails.VLRVENDA))} <small>por {productDetails.CODVOL}</small></strong></header>
+              <header><span className="eyebrow">Detalhes do produto</span><h2>{productDetails.DESCRPROD}</h2><p>Cód. {productDetails.CODPROD} · {productDetails.CODVOL}{productLots[0]?.REFERENCIA ? ` · Ref. ${productLots[0].REFERENCIA}` : ""}</p><strong className="product-details-price">{money(promotionUnitPrice(promotionalProduct(productDetails)))} <small>por {productDetails.CODVOL}{promotionalProduct(productDetails).promotionId ? ' · Promoção' : ''}</small></strong></header>
             </div>
             <div className="product-details-summary">
               <div className="product-details-total"><PackageCheck size={20} /><span><small>Quantidade total disponível</small><strong>{Number(productDetails.DISPONIVEL).toLocaleString("pt-BR")} {productDetails.CODVOL}</strong></span></div>

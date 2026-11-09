@@ -1,5 +1,6 @@
 import { executeQuery, type SankhyaSession } from './sankhya';
 import { readAllQueryRows } from './query-pagination';
+import { orderBillingFields } from './order-status';
 
 export async function loadClientDetails(session: SankhyaSession, partnerId: number, sellerId: number) {
   const [client] = await executeQuery(session, `
@@ -23,10 +24,7 @@ export async function loadClientDetails(session: SankhyaSession, partnerId: numb
     query(`SELECT CODCONTATO,NOMECONTATO,TELEFONE,CELULAR,EMAIL,CARGO FROM TGFCTT
             WHERE CODPARC=${partnerId} AND ATIVO='S' ORDER BY NOMECONTATO,CODCONTATO`),
     query(`SELECT C.NUNOTA,C.NUMNOTA,C.CODPARC,C.CODTIPOPER,C.DTNEG,C.VLRNOTA,C.STATUSNOTA,C.PENDENTE,
-             (SELECT MAX(F.DTENTSAI) FROM TGFVAR V JOIN TGFCAB F ON F.NUNOTA=V.NUNOTA AND F.TIPMOV<>'P'
-               WHERE V.NUNOTAORIG=C.NUNOTA) DTFAT,
-             CASE WHEN EXISTS (SELECT 1 FROM TGFVAR V JOIN TGFCAB F ON F.NUNOTA=V.NUNOTA AND F.TIPMOV<>'P'
-               WHERE V.NUNOTAORIG=C.NUNOTA) THEN 'S' ELSE 'N' END FATURADO
+             ${orderBillingFields()}
             FROM TGFCAB C WHERE C.CODPARC=${partnerId} AND C.CODVEND=${sellerId}
              AND C.CODTIPOPER IN (5,6) AND C.TIPMOV='P' ORDER BY C.NUNOTA DESC`),
   ]);

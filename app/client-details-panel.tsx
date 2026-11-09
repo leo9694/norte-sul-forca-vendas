@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Building2, LoaderCircle, X } from 'lucide-react';
 import { clientDetailDate, clientOrderHistory, type ClientDetailRow, type ClientDetails } from './client-details-model';
 import { readClientDetails, saveClientDetails } from './client-details-store';
+import { isOrderBilled, orderConferenceLabel } from './order-status';
 
 const tabs = ['Perfil', 'Contatos', 'Endereço', 'Histórico de pedidos'];
 const currency = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -89,7 +90,7 @@ export function ClientDetailsPanel({ client, orders, userId, sessionSellerId, se
         </dl></>}
         {index === 3 && <><div className="client-history-heading"><h3>Histórico de pedidos</h3><span>{history.length} {history.length === 1 ? 'pedido' : 'pedidos'}</span></div>
           {!details && <p className="client-detail-status">Histórico disponível na carga deste aparelho. Conecte-se para consultar o histórico atualizado.</p>}
-          {history.length ? <div className="client-detail-orders">{history.map(order => <article key={Number(order.NUNOTA)}><div><strong>Pedido {order.NUNOTA}</strong><span className={`client-order-status ${order.FATURADO === 'S' ? 'billed' : ''}`}>{order.FATURADO === 'S' ? 'Faturado' : order.STATUSNOTA === 'L' ? 'Confirmado' : 'Pendente'}</span></div><p>{Number(order.CODTIPOPER) === 6 ? 'TOP 6 · Bonificação' : 'TOP 5 · Pedido de venda'}</p><dl className="client-detail-grid"><Info label="Negociação" value={clientDetailDate(order.DTNEG)} /><Info label="Faturamento" value={order.FATURADO === 'S' ? clientDetailDate(order.DTFAT) : 'Não faturado'} /></dl><strong className="client-order-value">{currency(Number(order.VLRNOTA || 0))}</strong></article>)}</div> : <p className="client-detail-empty">{loading ? 'Carregando pedidos...' : details ? 'Nenhum pedido encontrado para este cliente nesta carteira.' : 'Nenhum pedido deste cliente disponível neste aparelho.'}</p>}
+          {history.length ? <div className="client-detail-orders">{history.map(order => <article key={Number(order.NUNOTA)}><div><strong>Pedido {order.NUNOTA}</strong><span className={`client-order-status ${isOrderBilled(order) ? 'billed' : ''}`}>{isOrderBilled(order) ? 'Faturado' : orderConferenceLabel(order)}</span></div><p>{Number(order.CODTIPOPER) === 6 ? 'Bonificação' : 'Pedido de venda'}</p><dl className="client-detail-grid"><Info label="Negociação" value={clientDetailDate(order.DTNEG)} /><Info label="Faturamento" value={isOrderBilled(order) ? clientDetailDate(order.DTFAT) : 'Não faturado'} /></dl><strong className="client-order-value">{currency(Number(order.VLRNOTA || 0))}</strong></article>)}</div> : <p className="client-detail-empty">{loading ? 'Carregando pedidos...' : details ? 'Nenhum pedido encontrado para este cliente nesta carteira.' : 'Nenhum pedido deste cliente disponível neste aparelho.'}</p>}
         </>}
       </section>)}
     </div>

@@ -10,7 +10,7 @@ function financialStatus(title) {
 }
 
 export function normalizeOrderDocuments(invoice, titles = []) {
-  if (!invoice) {
+  if (!invoice || invoice.STATUSNOTA !== 'L' || invoice.TIPMOV !== 'V' || ![35, 10].includes(numberValue(invoice.CODTIPOPER))) {
     return {
       billed: false,
       invoice: null,

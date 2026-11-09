@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { priceInheritanceCtes } from '../app/api/_lib/price-inheritance.ts';
 import { allocateOrderLots } from '../app/stock-lots.ts';
+import { applyPromotions, promotionUnitPrice } from '../app/promotional-prices.ts';
 
 test('online catalog, groups and lots only query stock from location 1010101', async () => {
   const source = await readFile(new URL('../app/api/sankhya/data/route.ts', import.meta.url), 'utf8');
@@ -33,7 +34,7 @@ test('older offline loads cannot display other locations or mix companies', asyn
   assert.equal(matches(8)({ CODEMP: 8 }), false);
 });
 
-async function orderApi(location, quantity = 1, stockRows = null) {
+async function orderApi(location, quantity = 1, stockRows = null, promo = {}) {
   const source = await readFile(new URL('../app/api/sankhya/orders/route.ts', import.meta.url), 'utf8');
   const js = ts.transpileModule(source.replace(/^import[^\n]+\n/gm, ''), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -47,13 +48,14 @@ async function orderApi(location, quantity = 1, stockRows = null) {
     if (sql.includes('FROM TGFTPV')) return [{ DHALTER: '14102026 00:00:00' }];
     return [{ CODTAB: 8 }];
   };
-  const POST = new Function('requireSession', 'executeQuery', 'canAnalyzeOtherSellers', 'callSankhya', 'priceInheritanceCtes', 'allocateOrderLots',
+  const POST = new Function('requireSession', 'executeQuery', 'canAnalyzeOtherSellers', 'callSankhya', 'priceInheritanceCtes', 'allocateOrderLots', 'loadPromotions', 'applyPromotions', 'promotionUnitPrice',
     js.replace('export async function POST', 'return async function POST'))(
       async () => ({ sellerId: 123 }), executeQuery, async () => false,
-      async (...args) => { sent.push(args.at(-1)); return { responseBody: { pk: { NUNOTA: { $: '1234' } } } }; }, priceInheritanceCtes, allocateOrderLots);
+      async (...args) => { sent.push(args.at(-1)); return { responseBody: { pk: { NUNOTA: { $: '1234' } } } }; }, priceInheritanceCtes, allocateOrderLots,
+      async () => ({ rules: [], bands: [], partners: [], products: [], negotiations: [], parameters: [], seller: 123, sellerGroup: '', ...promo.data }), applyPromotions, promotionUnitPrice);
   const response = await POST(new Request('http://local/api/sankhya/orders', {
     method: 'POST', body: JSON.stringify({ partner: 7212, company: 8, priceCode: 8, operation: 5, negotiation: 23,
-      items: [{ product: 3799, quantity, location, control: '50355', unitPrice: 13.8, priceTable: 2602, volume: 'UN' }] }),
+      items: [{ product: 3799, quantity, location, control: '50355', unitPrice: 13.8, priceTable: 2602, volume: 'UN', ...promo.item }] }),
   }));
   return { response, body: await response.json(), queries, sent };
 }
@@ -88,4 +90,19 @@ test('order submission includes separate lot lines in expiry order', async () =>
   assert.equal(result.response.status, 200);
   assert.equal(result.sent.length, 1);
   assert.deepEqual(result.sent[0].nota.itens.item.map(row => [row.CONTROLE.$, row.QTDNEG.$]), [['soon', '3'], ['50355', '5']]);
+});
+
+test('server verifies promotion against ERP rules and preserves promotional plus typed discounts across lot splitting', async () => {
+  const promo = { data: { rules: [{ NUPROMOCAO:774, CODPROD:3799, CODEMP:8, DTINICIAL:'01012020 00:00:00', DTFINAL:'31122999 00:00:00', PERCENTUAL:25 }], negotiations:[{CODTIPVENDA:23,DESCPROM:'D'}] }, item: { promotionId:774, promotionalPrice:10.35, adjustmentPercent:-10 } };
+  const result = await orderApi(1010101, 1, null, promo);
+  assert.equal(result.response.status,200);
+  const line = result.sent[0].nota.itens.item[0];
+  assert.equal(line.VLRUNIT.$,'13.8'); assert.equal(line.NUPROMOCAO.$,'774');
+  assert.ok(Math.abs(Number(line.PERCDESC.$)-32.5)<1e-8);
+  assert.ok(Math.abs(Number(line.PERCDESCPROM.$)-25)<1e-8);
+  assert.equal(line.PERCDESCDIGITADO.$,'10');
+  for (const item of [{}, {promotionId:774,promotionalPrice:1}, {promotionId:775,promotionalPrice:10.35}, {promotionId:774,promotionalPrice:'invalid'}]) {
+    const invalid = await orderApi(1010101,1,null,{data:promo.data,item});
+    assert.equal(invalid.response.status,400); assert.equal(invalid.sent.length,0); assert.match(invalid.body.error,/promoção.*mudou/);
+  }
 });
