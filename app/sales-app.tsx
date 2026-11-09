@@ -3220,7 +3220,7 @@ function OrdersScreen({
           {filteredDrafts.map((draft) => (
             <article className="order-card draft-card" key={draft.id}>
               <span className="order-icon"><FileText /></span>
-              <div className="order-client"><strong>{draft.partner.NOMEPARC}</strong><small>Rascunho automático · Vendedor: {sellerNameForDraft(draft)}</small></div>
+              <div className="order-client"><strong title={`${draft.partner.CODPARC} - ${draft.partner.NOMEPARC}`}>{draft.partner.CODPARC} - {draft.partner.NOMEPARC}</strong><small>Rascunho automático · Vendedor: {sellerNameForDraft(draft)}</small></div>
               <div className="order-date"><small>{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</small></div>
               <div className="order-total"><strong>{money(cartTotal(draft.cart))}</strong></div>
               <button className="status draft" onClick={() => onResume({ ...draft, sellerName: sellerNameForDraft(draft) })}><FileText size={15} /> Continuar</button>
@@ -3256,7 +3256,7 @@ function OrdersScreen({
               <span className="order-icon">{index % 2 ? <Leaf /> : <Building2 />}</span>
               <div className="order-rich-content">
                 <div className="order-rich-head">
-                  <div className="order-client"><strong>{String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">{Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
+                  <div className="order-client"><strong title={`${order.CODPARC} - ${order.NOMEPARC}`}>{String(order.CODPARC)} - {String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">{Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
                   <div className="order-rich-actions">
                     <div className="order-document-links">
                       <button disabled={!online || !canDownloadOrderNfe(order) || openingOrderDocument !== null} title={canDownloadOrderNfe(order) ? "Abrir DANFE em outra aba" : "Disponível após confirmação da nota e autorização da NF-e"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
