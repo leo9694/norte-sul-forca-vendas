@@ -1,5 +1,5 @@
 import { callSankhya, canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
-import { priceInheritanceCtes } from "../../_lib/price-inheritance";
+import { orderPricesSql } from '../../_lib/order-prices';
 import { prepareOrderWithoutLots } from "../../../stock-lots";
 import { loadPromotions } from '../../_lib/promotions';
 import { applyPromotions, promotionUnitPrice } from '../../../promotional-prices';
@@ -124,42 +124,7 @@ export async function POST(request: Request) {
     const negotiationData = validNegotiations[0] as Record<string, unknown> | undefined;
     if (!negotiationData) throw new Error("Tipo de negociação inválido ou inativo.");
 
-    const productCodes = items.map((item) => item.product).join(",");
-    const validRows = await executeQuery(session, `
-      WITH ${priceInheritanceCtes()},
-      PRECOS AS (
-        SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
-               NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
-               X.VLRVENDA * (1 + H.PERCENTUAL / 100) VLRVENDA,
-               T.NUTAB, T.DTVIGOR, H.PRIORIDADE
-          FROM TGFEXC X
-          JOIN TGFTAB T ON T.NUTAB = X.NUTAB
-          JOIN HERANCA_PRECOS H ON H.CODTAB_FONTE = T.CODTAB AND H.CICLO = 'N'
-                               AND (T.NUTAB = H.NUTAB_FONTE OR H.ACEITA_HISTORICO = 'S')
-         WHERE H.CODTAB = ${priceCode}
-           AND T.DTVIGOR <= TRUNC(SYSDATE)
-           AND X.CODPROD IN (${productCodes})
-      ),
-      ITENS AS (
-        SELECT P.CODPROD, P.AGRUPMIN,
-               1010101 CODLOCAL, ' ' CONTROLE,
-               PR.NUTAB, PR.VLRVENDA,
-               ROW_NUMBER() OVER (
-                 PARTITION BY P.CODPROD
-                 ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC,
-                          CASE WHEN PR.CODLOCAL = 1010101 THEN 1 ELSE 0 END DESC
-               ) RN
-          FROM TGFPRO P
-          JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
-                         AND PR.CODLOCAL IN (0, 1010101) AND PR.CONTROLE = ' '
-         WHERE P.ATIVO = 'S'
-           AND P.AD_MOBILIDADE = 'S'
-      )
-      SELECT CODPROD, AGRUPMIN, CODLOCAL, CONTROLE, NUTAB, VLRVENDA
-        FROM ITENS
-       WHERE RN = 1
-         AND VLRVENDA > 0
-    `);
+    const validRows = await executeQuery(session, orderPricesSql(`SELECT ${company} CODEMP,${priceCode} CODTAB FROM DUAL`, items.map(item => item.product)));
     const allocatedItems = prepareOrderWithoutLots(items, validRows);
     const promotions = await loadPromotions(session, seller);
     const pricedItems = applyPromotions(items.map(item => ({ ...item, CODPROD: item.product, CODLOCAL: item.location,

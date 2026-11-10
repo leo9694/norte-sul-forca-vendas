@@ -54,7 +54,7 @@ export async function GET(request: Request) {
       negotiationName: String(header.DESCRTIPVENDA || ""), observation: String(header.OBSERVACAO || ""),
       cart: items.map(item => ({ ...item, quantity: Number(item.QTDNEG),
         VLRVENDA: duplicate ? Number(item.VLRUNIT) : Number(item.QTDNEG) > 0 ? (Number(item.VLRTOT) - Number(item.VLRDESC)) / Number(item.QTDNEG) : Number(item.VLRUNIT),
-        adjustmentPercent: duplicate && Number(item.NUPROMOCAO) > 0 ? -Number(item.PERCDESCDIGITADO || 0)
+        adjustmentPercent: duplicate && (Number(item.NUPROMOCAO) > 0 || Number(item.PERCDESCPROM) > 0) ? -Number(item.PERCDESCDIGITADO || 0)
           : duplicate && Number(item.QTDNEG) * Number(item.VLRUNIT) > 0 ? ((Number(item.VLRTOT) - Number(item.VLRDESC)) / (Number(item.QTDNEG) * Number(item.VLRUNIT)) - 1) * 100 : 0, DISPONIVEL: 0,
       })),
     } }, { headers: { "Cache-Control": "no-store" } });

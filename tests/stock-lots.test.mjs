@@ -56,6 +56,9 @@ test('the editor allows product totals greater than a single lot and preserves r
   assert.equal(cart[0].quantity, 3);
   setQuantity({ ...product, DISPONIVEL: 0 }, 1);
   assert.equal(cart[0].quantity, 4);
+  cart[0].CONTROLE = ' ';
+  setQuantity({ ...product, CONTROLE:'another cached lot' }, 1);
+  assert.equal(cart.length, 1); assert.equal(cart[0].quantity, 5);
 });
 
 test('preparing orders without lots preserves every quantity, price and adjustment without mutating the draft', () => {

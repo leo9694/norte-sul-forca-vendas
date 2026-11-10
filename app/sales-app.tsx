@@ -102,6 +102,7 @@ type ProductLot = ApiRow & {
 };
 type CartItem = Product & { quantity: number; adjustmentPercent?: number; promotionId?: number; promotionalPrice?: number; promotionError?: string };
 type PriceTable = { CODEMP?: number; CODTAB: number; NOMETAB: string };
+type OrderPriceResult = { company: number; priceCode: number; priceName: string; rows: ApiRow[] };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
 type OrderOperation = { CODTIPOPER: number; DESCROPER: string };
 type OrderCompany = { CODEMP: number; NOMEFANTASIA: string; GRUPOICMS?: number | null; CODTAB?: number | null };
@@ -1524,10 +1525,12 @@ export function SalesApp() {
 
   useEffect(() => {
     const data = offlineData?.promotions;
-    if (!draftsReady || !data || data.seller !== sellerId) return;
+    if (!draftsReady || !data || data.seller !== sellerId || !offlineData.basePrices) return;
     for (const draft of draftsRef.current) {
       if (Number(draft.sellerId || sellerId) !== sellerId || !draft.companyCode || !draft.priceCode) continue;
-      const base = refreshDraftPrices(draft.cart, offlineData.products, draft.companyCode, draft.priceCode);
+      let base: CartItem[];
+      try { base = refreshDraftPrices(draft.cart, offlineData.basePrices, draft.companyCode, draft.priceCode, true); }
+      catch { continue; } // Mantém o rascunho íntegro; a revisão online mostra o preço ausente.
       const cart = applyPromotions(base, data, { partner: Number(draft.partner.CODPARC), company: draft.companyCode, table: draft.priceCode, negotiation: draft.negotiation, operation: Number(draft.operation || 5) });
       if (cart !== draft.cart) void saveDraft({ ...draft, cart, updatedAt: Date.now() }).catch(() => {});
     }
@@ -1786,13 +1789,26 @@ export function SalesApp() {
             onNew={openNewOrder}
             onDuplicate={async (draft) => {
               const targetSeller = Number(draft.sellerId || sellerId);
+              let priceData: OrderPriceResult;
+              if (online) {
+                priceData = await api<OrderPriceResult>('/api/sankhya/order-prices', {
+                  method: 'POST', cache: 'no-store', headers: { 'Content-Type':'application/json' },
+                  body: JSON.stringify({ partner: draft.partner.CODPARC, company: Number(draft.companyCode || 0), seller: targetSeller, products: [...new Set(draft.cart.map(item => Number(item.CODPROD)))] }),
+                });
+              } else {
+                if (offlineData?.seller.sellerId !== targetSeller || !offlineData.basePrices) throw new Error('Faça uma nova carga para atualizar os preços antes de duplicar.');
+                const binding = offlineData.partnerCompanies?.find(row => Number(row.CODPARC)===Number(draft.partner.CODPARC) && (!draft.companyCode || Number(row.CODEMP)===draft.companyCode));
+                if (!binding) throw new Error('Cliente sem tabela nesta empresa. Conecte-se para atualizar o cadastro.');
+                priceData = { company: Number(binding.CODEMP), priceCode: Number(binding.CODTAB), priceName: String(offlineData.tables.find(row => Number(row.CODTAB)===Number(binding.CODTAB))?.NOMETAB || ''), rows: offlineData.basePrices };
+              }
+              const baseCart = refreshDraftPrices(draft.cart, priceData.rows, priceData.company, priceData.priceCode, true);
               const promotionData = online
                 ? await api<Promotions>(`/api/sankhya/promotions?seller=${targetSeller}`, { cache: 'no-store' })
                 : offlineData?.promotions?.seller === targetSeller ? offlineData.promotions : null;
               if (!promotionData) throw new Error('Faça uma nova carga para atualizar os descontos antes de duplicar.');
-              draft = { ...draft, cart: applyPromotions(draft.cart, promotionData, {
-                partner: Number(draft.partner.CODPARC), company: Number(draft.companyCode || 0),
-                table: draft.priceCode, negotiation: draft.negotiation, operation: Number(draft.operation || 5),
+              draft = { ...draft, companyCode: priceData.company, priceCode: priceData.priceCode, priceName: priceData.priceName, cart: applyPromotions(baseCart, promotionData, {
+                partner: Number(draft.partner.CODPARC), company: priceData.company,
+                table: priceData.priceCode, negotiation: draft.negotiation, operation: Number(draft.operation || 5),
               }) };
               await saveDraft(draft);
               setActiveDraft(draft);
@@ -4039,6 +4055,8 @@ function NewOrderV2({
   const [cart, setCart] = useState<CartItem[]>(draft?.cart ?? []);
   const [promotions, setPromotions] = useState<Promotions | null>(null);
   const [promotionsError, setPromotionsError] = useState('');
+  const [pricesReady, setPricesReady] = useState(false);
+  const [pricesError, setPricesError] = useState('');
   useEffect(() => {
     let active = true;
     setPromotions(null);
@@ -4329,10 +4347,35 @@ function NewOrderV2({
     return [...consolidated.values()];
   };
 
+  const cartProductCodes = [...new Set(cart.map(item => Number(item.CODPROD)))].sort((a,b) => a-b).join(',');
   useEffect(() => {
-    if (!offlineData || offlineData.seller.sellerId !== actingSellerId || !companyCode || !priceCode) return;
-    setCart(current => refreshDraftPrices(current, offlineData.products, companyCode, priceCode));
-  }, [offlineData, companyCode, priceCode, actingSellerId]);
+    let active = true;
+    setPricesReady(false); setPricesError('');
+    if (!cartProductCodes) { setPricesReady(true); return; }
+    if (!companyCode || !priceCode) return;
+    const update = (data: OrderPriceResult) => {
+      if (!active) return;
+      // Valida antes de atualizar o estado: uma falha mantém todos os itens.
+      refreshDraftPrices(cart, data.rows, data.company, data.priceCode, true);
+      setCart(current => {
+        const base = refreshDraftPrices(current, data.rows, data.company, data.priceCode);
+        return promotions ? applyPromotions(base, promotions, { partner:Number(partner.CODPARC), company:data.company, table:data.priceCode, negotiation, operation }) : base;
+      });
+      if (data.priceCode!==priceCode) setPriceCode(data.priceCode);
+      setPricesReady(true);
+    };
+    if (!online) {
+      try {
+        if (offlineData?.seller.sellerId!==actingSellerId || !offlineData.basePrices) throw new Error('Faça uma nova carga para obter os preços-base da tabela.');
+        update({ company: companyCode, priceCode, priceName:'', rows: offlineData.basePrices });
+      } catch (err) { setPricesError(err instanceof Error ? err.message : 'Não foi possível atualizar os preços.'); }
+    } else {
+      api<OrderPriceResult>('/api/sankhya/order-prices', { method:'POST', cache:'no-store', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ partner:partner.CODPARC, company:companyCode, seller:actingSellerId, products:cartProductCodes.split(',').map(Number) }) })
+        .then(update).catch(err => { if (active) setPricesError(err.message); });
+    }
+    return () => { active = false; };
+  }, [cartProductCodes, offlineData, companyCode, priceCode, actingSellerId, partner.CODPARC, online]);
 
   const currentDraft = (): OrderDraft => ({
     id: draftId,
@@ -4513,27 +4556,28 @@ function NewOrderV2({
 
   const setQuantity = (product: Product, change: number) => {
     setCart((current) => {
-      const existing = current.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
+      const existing = current.includes(product as CartItem) ? product as CartItem : current.find(item => Number(item.CODPROD)===Number(product.CODPROD));
       const grouping = Math.max(Number(product.AGRUPMIN || 1), 1);
       // Reduzir deve retirar somente a quantidade solicitada, mesmo se o estoque mudou.
       const requested = Math.max(0, (existing?.quantity || 0) + change * grouping);
       const next = requested;
       if (!next) return current.filter((item) => item !== existing);
       if (existing) return current.map((item) => item === existing ? { ...item, quantity: next } : item);
-      return [...current, { ...product, quantity: next }];
+      return [...current, { ...product, CODLOCAL:1010101, CONTROLE:' ', quantity: next }];
     });
   };
 
   const quantityOf = (product: Product) =>
-    cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL)?.quantity || 0;
+    cart.filter(item => Number(item.CODPROD)===Number(product.CODPROD)).reduce((sum,item) => sum+item.quantity,0);
   const cartItemOf = (product: Product) =>
-    cart.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
+    cart.find(item => Number(item.CODPROD)===Number(product.CODPROD));
   const setAdjustment = (product: Product, value: string) => {
     const parsed = Number(value.replace(",", "."));
     const adjustmentPercent = Number.isFinite(parsed) ? Math.max(-99.99, Math.min(999.99, parsed)) : 0;
-    setCart((current) => current.map((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL
-      ? { ...item, adjustmentPercent }
-      : item));
+    setCart(current => {
+      const target = current.includes(product as CartItem) ? product : current.find(item => Number(item.CODPROD)===Number(product.CODPROD));
+      return current.map(item => item===target ? { ...item, adjustmentPercent } : item);
+    });
   };
 
   const openProductDetails = (product: Product) => {
@@ -4671,6 +4715,7 @@ function NewOrderV2({
   };
 
   const sendOrder = async () => {
+    if (!pricesReady || pricesError) { setError(pricesError || 'Aguarde a atualização dos preços da tabela.'); return; }
     if (!promotions || promotionsError || cart.some(item => item.promotionError)) {
       setError(promotionsError || cart.find(item => item.promotionError)?.promotionError || 'Aguarde a atualização dos descontos promocionais.');
       return;
@@ -4869,6 +4914,8 @@ function NewOrderV2({
             {!online && <div className="offline-order-notice"><CloudOff size={20} /><span><strong>Rascunho salvo offline</strong><small>Conecte-se à internet para validar os dados atuais e enviar ao Sankhya.</small></span></div>}
           </section>
         )}
+        {pricesError && <div className="global-error">{pricesError}</div>}
+        {!pricesReady && !pricesError && cart.length>0 && <p role="status">Atualizando preços da tabela do cliente…</p>}
         {promotionsError && <div className="global-error">{promotionsError}</div>}
         {cart.find(item => item.promotionError)?.promotionError && <div className="global-error">{cart.find(item => item.promotionError)?.promotionError}</div>}
         {error && <div className="global-error">{error}</div>}

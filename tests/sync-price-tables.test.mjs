@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { orderBillingFields } from '../app/api/_lib/order-status.ts';
+import { orderPricesSql } from './helpers/order-prices.mjs';
 
 const source = await readFile(new URL('../app/api/sankhya/sync/route.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source.replace(/^import[^\n]+\n/gm, ''), {
@@ -19,12 +20,12 @@ async function load({ tables = [{ CODEMP: 1, CODTAB: 2 }, { CODEMP: 6, CODTAB: 4
     }
     return [];
   };
-  const factory = new Function('executePage', 'requireSession', 'readAllQueryRows', 'priceInheritanceCtes', 'orderBillingFields', 'loadPromotions',
+  const factory = new Function('executePage', 'requireSession', 'readAllQueryRows', 'priceInheritanceCtes', 'orderBillingFields', 'loadPromotions', 'orderPricesSql',
     js.replace('export async function GET', 'return async function GET'));
   const GET = factory(executePage, async () => {
     if (expired) throw new Error('AUTH_REQUIRED');
     return { sellerId: 10 };
-  }, (query, sql) => query(sql), () => 'HERANCA_PRECOS AS (SELECT 1 FROM DUAL)', orderBillingFields, async () => ({ rules: [] }));
+  }, (query, sql) => query(sql), () => 'HERANCA_PRECOS AS (SELECT 1 FROM DUAL)', orderBillingFields, async () => ({ rules: [] }), orderPricesSql);
   const response = await GET(new Request('http://local/api/sankhya/sync'));
   return { queries, response, body: await response.json() };
 }

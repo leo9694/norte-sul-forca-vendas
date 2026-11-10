@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
-import { priceInheritanceCtes } from '../app/api/_lib/price-inheritance.ts';
+import { orderPricesSql } from './helpers/order-prices.mjs';
 import { prepareOrderWithoutLots } from '../app/stock-lots.ts';
 import { applyPromotions, promotionUnitPrice } from '../app/promotional-prices.ts';
 
@@ -48,10 +48,10 @@ async function orderApi(location, quantity = 1, stockRows = null, promo = {}) {
     if (sql.includes('FROM TGFTPV')) return [{ DHALTER: '14102026 00:00:00' }];
     return [{ CODTAB: 8 }];
   };
-  const POST = new Function('requireSession', 'executeQuery', 'canAnalyzeOtherSellers', 'callSankhya', 'priceInheritanceCtes', 'prepareOrderWithoutLots', 'loadPromotions', 'applyPromotions', 'promotionUnitPrice',
+  const POST = new Function('requireSession', 'executeQuery', 'canAnalyzeOtherSellers', 'callSankhya', 'orderPricesSql', 'prepareOrderWithoutLots', 'loadPromotions', 'applyPromotions', 'promotionUnitPrice',
     js.replace('export async function POST', 'return async function POST'))(
       async () => ({ sellerId: 123 }), executeQuery, async () => false,
-      async (...args) => { sent.push(args.at(-1)); return { responseBody: { pk: { NUNOTA: { $: '1234' } } } }; }, priceInheritanceCtes, prepareOrderWithoutLots,
+      async (...args) => { sent.push(args.at(-1)); return { responseBody: { pk: { NUNOTA: { $: '1234' } } } }; }, orderPricesSql, prepareOrderWithoutLots,
       async () => ({ rules: [], bands: [], partners: [], products: [], negotiations: [], parameters: [], seller: 123, sellerGroup: '', ...promo.data }), applyPromotions, promotionUnitPrice);
   const response = await POST(new Request('http://local/api/sankhya/orders', {
     method: 'POST', body: JSON.stringify({ partner: 7212, company: 8, priceCode: 8, operation: promo.operation ?? 5, negotiation: promo.operation === 6 ? 53 : 23,
@@ -97,9 +97,9 @@ test('order price validation uses the current inherited generic price, not lot b
   assert.equal(result.sent.length, 1);
   assert.deepEqual(result.sent[0].nota.itens.item.map(row => [row.CONTROLE.$, row.QTDNEG.$]), [[' ', '8']]);
   const query = result.queries.find(sql => sql.includes('WITH '));
-  assert.match(query, /PR.CODLOCAL IN \(0, 1010101\) AND PR.CONTROLE = ' '/);
-  assert.match(query, /PARTITION BY P.CODPROD\s+ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC/);
-  assert.match(query, /P.ATIVO = 'S'[\s\S]*P.AD_MOBILIDADE = 'S'/);
+  assert.match(query, /NVL\(X.CODLOCAL,0\) IN \(0,1010101\) AND TRIM\(X.CONTROLE\) IS NULL/);
+  assert.match(query, /PARTITION BY PR.CODEMP, PR.CODTAB, P.CODPROD\s+ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC/);
+  assert.match(query, /P.ATIVO='S'[\s\S]*P.AD_MOBILIDADE='S'/);
   for (const changed of [{ VLRVENDA: 99 }, { NUTAB: 999 }, { AGRUPMIN: 5 }]) {
     const invalid = await orderApi(1010101, 8, [{ ...base, ...changed }]);
     assert.equal(invalid.response.status, 400); assert.equal(invalid.sent.length, 0);

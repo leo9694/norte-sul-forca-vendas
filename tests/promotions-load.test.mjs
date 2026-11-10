@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { applyPromotions } from '../app/promotional-prices.ts';
+import { refreshDraftPrices } from '../app/draft-prices.ts';
 
 test('promotion load normalizes the partner-group join and includes pricing metadata for products copied from old orders', async () => {
   const source = await readFile(new URL('../app/api/_lib/promotions.ts', import.meta.url), 'utf8');
@@ -47,13 +48,17 @@ test('app duplicate action fetches current promotions before persisting the copy
     bands: [], products: [{ CODPROD: 100, GRUPODESCPROD: 'GOLDEN' }], partners: [{ CODPARC: 1193, GRUPODESCPARC: 'DESC379' }], negotiations: [{ CODTIPVENDA: 37, DESCPROM: 'D' }], parameters: [], seller: 4, sellerGroup: '' };
   const draft = { id: 'copy', sellerId: 4, partner: { CODPARC: 1193 }, companyCode: 1, priceCode: 4, negotiation: 37,
     cart: [{ CODPROD: 100, CODLOCAL: 1010101, CODVOL: 'UN', CONTROLE: '', VLRVENDA: 100, quantity: 5, promotionalPrice: 100, promotionId: 0 }] };
-  const api = async (url, options) => { events.push('fetch'); assert.match(url, /seller=4/); assert.equal(options.cache, 'no-store'); return data; };
+  const api = async (url, options) => {
+    assert.equal(options.cache, 'no-store');
+    if (url.includes('order-prices')) { events.push('prices'); return { company:1,priceCode:4,priceName:'Agro',rows:[{CODEMP:1,CODTAB:4,CODPROD:100,CODLOCAL:1010101,CONTROLE:' ',VLRVENDA:100,NUTAB:200}] }; }
+    events.push('fetch'); assert.match(url, /seller=4/); return data;
+  };
   let saved;
   const noop = () => {};
-  const create = fetch => new Function('online', 'sellerId', 'offlineData', 'api', 'applyPromotions', 'saveDraft', 'setActiveDraft', 'setStartingPartner', 'setOrderSellerId', 'setOrderSellerName', 'sellerName', 'pushHistoryView', 'setScreen', 'setToast', js + '; return duplicate;')(
-    true, 1, { promotions: { ...data, rules: [] } }, fetch, applyPromotions, async value => { saved = value; events.push('save'); }, noop, noop, noop, noop, 'Gestor', noop, noop, noop);
+  const create = fetch => new Function('online', 'sellerId', 'offlineData', 'api', 'applyPromotions', 'saveDraft', 'setActiveDraft', 'setStartingPartner', 'setOrderSellerId', 'setOrderSellerName', 'sellerName', 'pushHistoryView', 'setScreen', 'setToast', 'refreshDraftPrices', js + '; return duplicate;')(
+    true, 1, { promotions: { ...data, rules: [] } }, fetch, applyPromotions, async value => { saved = value; events.push('save'); }, noop, noop, noop, noop, 'Gestor', noop, noop, noop, refreshDraftPrices);
   await create(api)(draft);
-  assert.deepEqual(events, ['fetch', 'save']);
+  assert.deepEqual(events, ['prices', 'fetch', 'save']);
   assert.equal(saved.cart[0].promotionId, 778);
   assert.ok(Math.abs(saved.cart[0].promotionalPrice - 84.41) < 1e-8);
   assert.equal(draft.cart[0].promotionalPrice, 100);

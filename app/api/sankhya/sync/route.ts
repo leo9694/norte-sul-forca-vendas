@@ -3,6 +3,7 @@ import { priceInheritanceCtes } from "../../_lib/price-inheritance";
 import { readAllQueryRows } from "../../_lib/query-pagination";
 import { orderBillingFields } from '../../_lib/order-status';
 import { loadPromotions } from '../../_lib/promotions';
+import { orderPricesSql } from '../../_lib/order-prices';
 
 const executeQuery = (session: SankhyaSession, sql: string) =>
   readAllQueryRows(page => executePage(session, page), sql);
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
     `;
     const tables = await executeQuery(session, `${customerTablesSql} ORDER BY CODEMP, NOMETAB, CODTAB`);
 
-    const [clients, partnerCompanies, orders, negotiations, operations, products, productGroups, promotions] = await Promise.all([
+    const [clients, partnerCompanies, orders, negotiations, operations, products, productGroups, promotions, basePrices] = await Promise.all([
       executeQuery(session, `
         SELECT P.CODPARC, P.NOMEPARC, P.RAZAOSOCIAL, P.CGC_CPF AS CGCCPF,
                EN.NOMEEND ENDERECO, P.NUMEND, P.COMPLEMENTO, B.NOMEBAI BAIRRO, P.CEP,
@@ -168,11 +169,13 @@ export async function GET(request: Request) {
          ORDER BY GRAU, DESCRGRUPOPROD, CODGRUPOPROD
       `),
       loadPromotions(session),
+      tables.length ? executeQuery(session, orderPricesSql(customerTablesSql)) : [],
     ]);
 
     return Response.json({
       version: 1,
       promotions,
+      basePrices,
       syncedAt: Date.now(),
       seller: {
         user: session.user,

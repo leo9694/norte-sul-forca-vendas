@@ -11,13 +11,13 @@ test('report uses the Sankhya address, neighborhood and state lookup tables', ()
   assert.match(source, /LEFT JOIN TSIUFS U ON U\.CODUF = CI\.UF/);
 });
 
-async function route({ seller = 10, manager = false, expired = false, promotional = false } = {}) {
+async function route({ seller = 10, manager = false, expired = false, promotional = false, promotionId = 774 } = {}) {
   const queries = [];
   const session = { sellerId:10 };
   const executeQuery = async (_session, sql) => {
     queries.push(sql);
     return sql.includes('FROM TGFCAB') ? [{CODVEND:seller, CODPARC:1,NOMEPARC:'Cliente',RAZAOSOCIAL:'Cliente Ltda',ENDERECO:'Rua Teste',NUMEND:'10',CEP:'78820-000',INSCESTAD:'123',NOMECID:'Jaciara',UF:'MT',DTNEG:'2026-09-14',APELIDO:'Vendedor'}]
-      : [{CODPROD:2,DESCRPROD:'Produto',REFERENCIA:'789123',QTDNEG:5,VLRTOT:50,VLRDESC:5,VLRUNIT:10,...(promotional ? {NUPROMOCAO:774,PERCDESCPROM:25,PERCDESCDIGITADO:5}: {})}];
+      : [{CODPROD:2,DESCRPROD:'Produto',REFERENCIA:'789123',QTDNEG:5,VLRTOT:50,VLRDESC:5,VLRUNIT:10,...(promotional ? {NUPROMOCAO:promotionId,PERCDESCPROM:25,PERCDESCDIGITADO:5}: {})}];
   };
   const js = ts.transpileModule(source.replace(/^import[^\n]+\n/gm, ''), {compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
   const factory = new Function('executeQuery','requireSession','canAnalyzeOtherSellers','readAllQueryRows','draftSessionConflict', js.replace('export async function GET','return async function GET'));
@@ -66,8 +66,10 @@ test('duplication preserves base price, quantities and item adjustment without c
 });
 
 test('duplication of a sent promotion does not turn the old promotional discount into another manual discount', async () => {
-  const api = await route({promotional:true});
-  const {draft} = await (await api.GET(new Request('http://local?nunota=1&purpose=duplicate'))).json();
-  assert.equal(draft.cart[0].VLRVENDA,10);
-  assert.equal(draft.cart[0].adjustmentPercent,-5);
+  for (const promotionId of [774,0]) {
+    const api = await route({promotional:true,promotionId});
+    const {draft} = await (await api.GET(new Request('http://local?nunota=1&purpose=duplicate'))).json();
+    assert.equal(draft.cart[0].VLRVENDA,10);
+    assert.equal(draft.cart[0].adjustmentPercent,-5);
+  }
 });

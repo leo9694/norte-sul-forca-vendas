@@ -483,7 +483,8 @@ test("sends orders through an authenticated Sankhya service session", async () =
   assert.match(orderSource, /CODVEND:\s*\{ \$: String\(seller\) \}/);
   assert.match(orderSource, /operation !== 5 && operation !== 6/);
   assert.match(orderSource, /operation === 6 && negotiation !== 53/);
-  assert.match(orderSource, /P\.AGRUPMIN/);
+  assert.match(orderSource, /orderPricesSql\(/);
+  assert.match(await readFile(path.join(projectRoot, 'app/api/_lib/order-prices.ts'), 'utf8'), /P\.AGRUPMIN/);
   assert.match(orderSource, /prepareOrderWithoutLots\(items, validRows\)/);
   assert.doesNotMatch(orderSource, /FROM TGFEST|allocateOrderLots\(items, validRows\)/);
   assert.match(await readFile(path.join(projectRoot, "app", "stock-lots.ts"), "utf8"), /múltiplos de \$\{grouping\}/);
