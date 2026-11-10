@@ -1,6 +1,6 @@
 export type PromotionRow = Record<string, string | number | null>;
 export type Promotions = { rules: PromotionRow[]; bands: PromotionRow[]; partners: PromotionRow[]; products: PromotionRow[]; negotiations: PromotionRow[]; parameters: PromotionRow[]; sellerGroup: string; seller: number };
-export type PromotionContext = { partner: number; company: number; table: number; negotiation: number; date?: string };
+export type PromotionContext = { partner: number; company: number; table: number; negotiation: number; operation?: number; date?: string };
 type Item = { CODPROD: number; CODLOCAL: number; CONTROLE: string; CODVOL: string; VLRVENDA: number; quantity: number; adjustmentPercent?: number; promotionId?: number; promotionalPrice?: number; promotionError?: string };
 const value = (v: unknown) => String(v ?? '').trim();
 const groupKey = (v: unknown) => value(v).toUpperCase();
@@ -32,7 +32,7 @@ export function applyPromotions<T extends Item>(items: T[], data: Promotions, co
       && (anyGroup(r.GRUPODESCVEND) || sameGroup(r.GRUPODESCVEND, data.sellerGroup))
       && (!Number(r.CODLOCAL) || Number(r.CODLOCAL) === item.CODLOCAL)
       && (!value(r.CODVOL) || value(r.CODVOL) === item.CODVOL)
-      && (r.USADESCCTRL !== 'S' || !value(r.CONTROLE) || value(r.CONTROLE) === value(item.CONTROLE)));
+      && (r.USADESCCTRL !== 'S' || !value(r.CONTROLE) || value(r.CONTROLE) === ([5, 6].includes(Number(context.operation)) ? '' : value(item.CONTROLE))));
     const candidates = rules.map(rule => {
       let percent = Number(rule.PERCENTUAL || 0), fixed = Number(rule.VLRVENDA || 0), error = '';
       if (Number(rule.VLRDESC)) error = 'Esta promoção em valor de desconto precisa ser revisada no Sankhya antes do envio.';

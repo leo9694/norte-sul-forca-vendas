@@ -1,6 +1,6 @@
 import { callSankhya, canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
-import { allocateOrderLots } from "../../../stock-lots";
+import { prepareOrderWithoutLots } from "../../../stock-lots";
 import { loadPromotions } from '../../_lib/promotions';
 import { applyPromotions, promotionUnitPrice } from '../../../promotional-prices';
 
@@ -126,18 +126,7 @@ export async function POST(request: Request) {
 
     const productCodes = items.map((item) => item.product).join(",");
     const validRows = await executeQuery(session, `
-      WITH ${priceInheritanceCtes()}, ESTOQUE AS (
-        SELECT CODPROD, CODLOCAL, CONTROLE,
-               MAX(DTVAL) DTVAL,
-               SUM(ESTOQUE - RESERVADO) DISPONIVEL
-          FROM TGFEST
-         WHERE CODEMP = ${company}
-           AND CODLOCAL = 1010101
-           AND ATIVO = 'S'
-           AND CODPROD IN (${productCodes})
-         GROUP BY CODPROD, CODLOCAL, CONTROLE
-        HAVING SUM(ESTOQUE - RESERVADO) > 0
-      ),
+      WITH ${priceInheritanceCtes()},
       PRECOS AS (
         SELECT X.CODPROD, NVL(X.CODLOCAL, 0) CODLOCAL,
                NVL(TRIM(X.CONTROLE), ' ') CONTROLE,
@@ -152,32 +141,30 @@ export async function POST(request: Request) {
            AND X.CODPROD IN (${productCodes})
       ),
       ITENS AS (
-        SELECT P.CODPROD, P.AGRUPMIN, E.CODLOCAL, E.CONTROLE, E.DISPONIVEL, E.DTVAL,
+        SELECT P.CODPROD, P.AGRUPMIN,
+               1010101 CODLOCAL, ' ' CONTROLE,
                PR.NUTAB, PR.VLRVENDA,
                ROW_NUMBER() OVER (
-                 PARTITION BY P.CODPROD, E.CODLOCAL, NVL(TRIM(E.CONTROLE), ' ')
+                 PARTITION BY P.CODPROD
                  ORDER BY PR.PRIORIDADE, PR.DTVIGOR DESC, PR.NUTAB DESC,
-                          CASE WHEN PR.CODLOCAL = E.CODLOCAL THEN 1 ELSE 0 END DESC,
-                          CASE WHEN PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') THEN 1 ELSE 0 END DESC
+                          CASE WHEN PR.CODLOCAL = 1010101 THEN 1 ELSE 0 END DESC
                ) RN
           FROM TGFPRO P
-          JOIN ESTOQUE E ON E.CODPROD = P.CODPROD
           JOIN PRECOS PR ON PR.CODPROD = P.CODPROD
-                         AND (PR.CODLOCAL = E.CODLOCAL OR PR.CODLOCAL = 0)
-                         AND (PR.CONTROLE = NVL(TRIM(E.CONTROLE), ' ') OR PR.CONTROLE = ' ')
+                         AND PR.CODLOCAL IN (0, 1010101) AND PR.CONTROLE = ' '
          WHERE P.ATIVO = 'S'
            AND P.AD_MOBILIDADE = 'S'
       )
-      SELECT CODPROD, AGRUPMIN, CODLOCAL, CONTROLE, DISPONIVEL, DTVAL, NUTAB, VLRVENDA
+      SELECT CODPROD, AGRUPMIN, CODLOCAL, CONTROLE, NUTAB, VLRVENDA
         FROM ITENS
        WHERE RN = 1
          AND VLRVENDA > 0
     `);
-    const allocatedItems = allocateOrderLots(items, validRows);
+    const allocatedItems = prepareOrderWithoutLots(items, validRows);
     const promotions = await loadPromotions(session, seller);
     const pricedItems = applyPromotions(items.map(item => ({ ...item, CODPROD: item.product, CODLOCAL: item.location,
       CONTROLE: item.control, CODVOL: item.volume, VLRVENDA: item.unitPrice })), promotions,
-      { partner, company, table: priceCode, negotiation });
+      { partner, company, table: priceCode, negotiation, operation });
     pricedItems.forEach((item, index) => {
       if (item.promotionError) throw new Error(item.promotionError);
       const expected = promotionUnitPrice(item);

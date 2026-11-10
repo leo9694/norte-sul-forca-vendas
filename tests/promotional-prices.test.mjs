@@ -103,6 +103,14 @@ test('duplicated order recomputes promotions for destination and does not mutate
 test('unsupported or invalid promotions block submission instead of silently inventing prices', () => {
   for (const override of [{ USADESCESP: 'S' }, { USADESCQTD: 'S' }, { PERCENTUAL: 100 }, { VLRDESC: 10 }]) assert.ok(applyPromotions([item], dataset([{ ...rule, ...override }]), context)[0].promotionError);
 });
+
+test('TOPs 5 and 6 do not use stale draft lots to obtain lot-specific promotions', () => {
+  const data = dataset([{ ...rule, USADESCCTRL: 'S', CONTROLE: 'A' }]);
+  for (const operation of [5, 6]) {
+    assert.equal(applyPromotions([item], data, { ...context, operation })[0].promotionId, 0);
+    assert.equal(applyPromotions([item], dataset(), { ...context, operation })[0].promotionId, 774);
+  }
+});
 test('promotions endpoint authenticates and enforces seller permission before querying discounts', async () => {
   const source = await readFile(new URL('../app/api/sankhya/promotions/route.ts', import.meta.url), 'utf8');
   const js = ts.transpileModule(source.replace(/^import[^\n]+\n/gm, ''), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;

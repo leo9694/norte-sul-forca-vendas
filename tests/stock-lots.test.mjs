@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateOrderLots, compareLotExpiry } from '../app/stock-lots.ts';
+import { allocateOrderLots, compareLotExpiry, prepareOrderWithoutLots } from '../app/stock-lots.ts';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
@@ -54,4 +54,16 @@ test('the editor allows product totals greater than a single lot and preserves r
   assert.equal(cart[0].quantity, 4);
   setQuantity({ ...product, DISPONIVEL: 0 }, -1);
   assert.equal(cart[0].quantity, 3);
+  setQuantity({ ...product, DISPONIVEL: 0 }, 1);
+  assert.equal(cart[0].quantity, 4);
+});
+
+test('preparing orders without lots preserves every quantity, price and adjustment without mutating the draft', () => {
+  const original = structuredClone(item);
+  const items = [{ ...item, quantity: 100 }, { ...item, control: 'old', quantity: 200, adjustmentPercent: -10 }];
+  const prepared = prepareOrderWithoutLots(items, [{ ...lots[0], DISPONIVEL: 0 }]);
+  assert.deepEqual(prepared.map(i => [i.quantity, i.control, i.adjustmentPercent]), [[100, ' ', -5], [200, ' ', -10]]);
+  assert.equal(items[0].control, item.control);
+  assert.deepEqual(item, original);
+  for (const quantity of [0, -1, Infinity, NaN]) assert.throws(() => prepareOrderWithoutLots([{ ...item, quantity }], lots), /quantidade ou preço inválido/);
 });

@@ -18,6 +18,22 @@ export function compareLotExpiry(a: Lot, b: Lot) {
 
 type Item = { product: number; quantity: number; location: number; control: string; unitPrice: number; priceTable: number };
 
+// TOPs 5 e 6: valida o produto e o preço, sem consultar/consumir saldos ou lotes.
+export function prepareOrderWithoutLots<T extends Item>(items: T[], rows: Record<string, unknown>[]): T[] {
+  return items.map(item => {
+    if (!Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unitPrice) || item.unitPrice <= 0) throw new Error('Há itens com quantidade ou preço inválido.');
+    const reference = rows.find(row => Number(row.CODPROD) === item.product);
+    if (!reference) throw new Error(`Produto ${item.product} indisponível para venda ou sem preço habilitado para mobilidade.`);
+    if (item.priceTable !== Number(reference.NUTAB)) throw new Error(`A tabela do produto ${item.product} mudou. Atualize o pedido.`);
+    if (!Number.isFinite(Number(reference.VLRVENDA)) || Number(reference.VLRVENDA) <= 0 || Math.abs(item.unitPrice - Number(reference.VLRVENDA)) > 0.005) {
+      throw new Error(`O preço do produto ${item.product} mudou. Atualize o pedido.`);
+    }
+    const grouping = Math.max(Number(reference.AGRUPMIN || 1), 1);
+    if (Math.abs(item.quantity / grouping - Math.round(item.quantity / grouping)) > 0.0001) throw new Error(`O produto ${item.product} deve ser negociado em múltiplos de ${grouping}.`);
+    return { ...item, location: 1010101, control: ' ' };
+  });
+}
+
 // Aloca FEFO com o saldo atual do ERP; nunca soma estoque de outros locais.
 // O mapa é compartilhado entre as linhas para não usar o mesmo saldo duas vezes.
 export function allocateOrderLots<T extends Item>(items: T[], rows: Record<string, unknown>[]): T[] {

@@ -1528,7 +1528,7 @@ export function SalesApp() {
     for (const draft of draftsRef.current) {
       if (Number(draft.sellerId || sellerId) !== sellerId || !draft.companyCode || !draft.priceCode) continue;
       const base = refreshDraftPrices(draft.cart, offlineData.products, draft.companyCode, draft.priceCode);
-      const cart = applyPromotions(base, data, { partner: Number(draft.partner.CODPARC), company: draft.companyCode, table: draft.priceCode, negotiation: draft.negotiation });
+      const cart = applyPromotions(base, data, { partner: Number(draft.partner.CODPARC), company: draft.companyCode, table: draft.priceCode, negotiation: draft.negotiation, operation: Number(draft.operation || 5) });
       if (cart !== draft.cart) void saveDraft({ ...draft, cart, updatedAt: Date.now() }).catch(() => {});
     }
   }, [offlineData, draftsReady, sellerId]);
@@ -1792,7 +1792,7 @@ export function SalesApp() {
               if (!promotionData) throw new Error('Faça uma nova carga para atualizar os descontos antes de duplicar.');
               draft = { ...draft, cart: applyPromotions(draft.cart, promotionData, {
                 partner: Number(draft.partner.CODPARC), company: Number(draft.companyCode || 0),
-                table: draft.priceCode, negotiation: draft.negotiation,
+                table: draft.priceCode, negotiation: draft.negotiation, operation: Number(draft.operation || 5),
               }) };
               await saveDraft(draft);
               setActiveDraft(draft);
@@ -4055,8 +4055,8 @@ function NewOrderV2({
   }, [online, actingSellerId, offlineData]);
   useEffect(() => {
     if (!promotions) return;
-    setCart(current => applyPromotions(current, promotions, { partner: Number(partner.CODPARC), company: companyCode, table: priceCode, negotiation }));
-  }, [promotions, cart, companyCode, priceCode, negotiation, partner.CODPARC]);
+    setCart(current => applyPromotions(current, promotions, { partner: Number(partner.CODPARC), company: companyCode, table: priceCode, negotiation, operation }));
+  }, [promotions, cart, companyCode, priceCode, negotiation, operation, partner.CODPARC]);
   const [brand, setBrand] = useState("");
   const [pendingBrand, setPendingBrand] = useState("");
   const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
@@ -4098,7 +4098,7 @@ function NewOrderV2({
     const existing = cart.find(item => item.CODPROD === product.CODPROD);
     const preview = existing || { ...product, quantity: Number(product.AGRUPMIN || 1) };
     return applyPromotions([...cart.filter(item => item !== existing), preview], promotions,
-      { partner: Number(partner.CODPARC), company: companyCode, table: priceCode, negotiation }).at(-1)!;
+      { partner: Number(partner.CODPARC), company: companyCode, table: priceCode, negotiation, operation }).at(-1)!;
   };
 
   const goToPhase = (nextPhase: OrderPhase) => {
@@ -4515,11 +4515,9 @@ function NewOrderV2({
     setCart((current) => {
       const existing = current.find((item) => item.CODPROD === product.CODPROD && item.CONTROLE === product.CONTROLE && item.CODLOCAL === product.CODLOCAL);
       const grouping = Math.max(Number(product.AGRUPMIN || 1), 1);
-      const otherQuantity = current.filter(item => item.CODPROD === product.CODPROD && item !== existing).reduce((sum, item) => sum + item.quantity, 0);
-      const available = Math.max(0, Math.floor((Number(product.DISPONIVEL) - otherQuantity) / grouping) * grouping);
       // Reduzir deve retirar somente a quantidade solicitada, mesmo se o estoque mudou.
       const requested = Math.max(0, (existing?.quantity || 0) + change * grouping);
-      const next = change < 0 ? requested : Math.max(existing?.quantity || 0, Math.min(available, requested));
+      const next = requested;
       if (!next) return current.filter((item) => item !== existing);
       if (existing) return current.map((item) => item === existing ? { ...item, quantity: next } : item);
       return [...current, { ...product, quantity: next }];

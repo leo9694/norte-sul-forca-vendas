@@ -18,8 +18,8 @@ test('decreasing quantity with zero stock preserves the remaining items', async 
   assert.equal(cart[0].quantity, 4);
   assert.equal(cart.length, 2);
   setQuantity(product, 1);
-  assert.equal(cart[0].quantity, 4);
-  setQuantity(product, -4);
+  assert.equal(cart[0].quantity, 5);
+  setQuantity(product, -5);
   assert.equal(cart.length, 1);
   assert.equal(cart[0].CODPROD, 2);
 });
