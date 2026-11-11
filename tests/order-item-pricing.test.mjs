@@ -60,7 +60,8 @@ test('review renders both unit prices, the discounted color class and an accessi
   const render = new Function('React','adjustedUnitPrice','money','cartItemTotal','Minus','Plus','Trash2','OrderAdjustmentField','setQuantity','setAdjustment','removeCartItem',js+';return row;')(
     React,adjustedUnitPrice,money,item=>adjustedUnitPrice(item)*item.quantity,icon,icon,icon,OrderAdjustmentField,()=>{},()=>{},()=>{});
   const html=renderToStaticMarkup(render(golden,0));
-  assert.match(html,/Tabela: R\$\s4,49/);
+  assert.match(html,/<span title="Preço de tabela">R\$\s4,49<\/span>/);
+  assert.doesNotMatch(html,/Tabela:/);
   assert.match(html,/class="review-discounted-price">Com desconto: R\$\s3,79 \/ UN/);
   assert.match(html,/aria-label="Remover Golden do carrinho"/);
   const regular=renderToStaticMarkup(render({...golden,promotionalPrice:undefined},0));

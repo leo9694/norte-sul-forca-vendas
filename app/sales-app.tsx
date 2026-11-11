@@ -4933,7 +4933,7 @@ function NewOrderV2({
                   const hasChange = Math.abs(finalPrice - tablePrice) > 0.00001, hasDiscount = finalPrice < tablePrice;
                   return <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}-${index}`}>
                     <div><strong>{item.CODPROD} - {item.DESCRPROD}</strong><div className="review-unit-prices">
-                      <span>Tabela: {money(tablePrice)}{!hasChange && ` / ${item.CODVOL}`}</span>
+                      <span title="Preço de tabela">{money(tablePrice)}{!hasChange && ` / ${item.CODVOL}`}</span>
                       {hasChange && <span className={hasDiscount ? 'review-discounted-price' : ''}>{hasDiscount ? 'Com desconto' : 'Preço final'}: {money(finalPrice)} / {item.CODVOL}</span>}
                     </div></div>
                     <strong>{money(cartItemTotal(item))}</strong>
