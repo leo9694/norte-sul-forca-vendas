@@ -71,3 +71,27 @@ export function applyPromotions<T extends Item>(items: T[], data: Promotions, co
 }
 
 export const promotionUnitPrice = (item: { VLRVENDA: number; promotionalPrice?: number }) => Number(item.promotionalPrice ?? item.VLRVENDA);
+
+type UnitPriceItem = Pick<Item, 'VLRVENDA' | 'promotionalPrice' | 'adjustmentPercent'>;
+export const itemAdjustment = (item: Pick<Item, 'adjustmentPercent'>) => {
+  const value = Number(item.adjustmentPercent || 0);
+  return Number.isFinite(value) ? value : 0;
+};
+export const adjustedUnitPrice = (item: UnitPriceItem) => promotionUnitPrice(item) * (1 + itemAdjustment(item) / 100);
+
+export function displayedAdjustment(item: UnitPriceItem) {
+  const table = Number(item.VLRVENDA), final = adjustedUnitPrice(item);
+  const percent = table > 0 && Number.isFinite(final) ? (final / table - 1) * 100 : 0;
+  return (Math.abs(percent) < 0.005 ? 0 : percent).toLocaleString('pt-BR', { maximumFractionDigits: 2, useGrouping: false });
+}
+
+// O campo mostra a diferença total contra a tabela. Só o ajuste adicional é
+// armazenado, para não aplicar a promoção outra vez ao desfocar/editar o campo.
+export function manualAdjustmentFromDisplay(item: UnitPriceItem, input: string): number | undefined {
+  const text = input.trim().replace(',', '.');
+  const percent = Number(text), promo = promotionUnitPrice(item), table = Number(item.VLRVENDA);
+  if (!text || !Number.isFinite(percent) || percent <= -100 || !Number.isFinite(promo) || promo <= 0 || !Number.isFinite(table) || table <= 0) return;
+  if (percent === Number(displayedAdjustment(item).replace(',', '.'))) return;
+  const manual = ((1 + percent / 100) * table / promo - 1) * 100;
+  return Math.max(-99.99, Math.min(999.99, Math.abs(manual) < 1e-8 ? 0 : manual));
+}

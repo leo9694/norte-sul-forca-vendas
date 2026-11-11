@@ -411,7 +411,8 @@ test("keeps the new sales-order flow modal, filter-first and draft-aware", async
   assert.match(activeFlow, /Controle \/ lote/);
   assert.match(activeFlow, /event\.target === event\.currentTarget/);
   assert.match(activeFlow, /review-item-quantity/);
-  assert.match(activeFlow, /− Desc\. \/ \+ Acrésc\./);
+  assert.match(source, /− Desc\. \/ \+ Acrésc\./);
+  assert.match(activeFlow, /OrderAdjustmentField/);
   assert.match(activeFlow, /adjustmentPercent: itemAdjustment\(item\)/);
   assert.match(activeFlow, /cartItemTotal\(item\)/);
   assert.match(activeFlow, /Salvar e enviar/);

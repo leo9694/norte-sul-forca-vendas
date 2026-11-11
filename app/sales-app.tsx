@@ -41,6 +41,7 @@ import {
   ShoppingCart,
   SlidersHorizontal,
   Sprout,
+  Trash2,
   UserRound,
   UsersRound,
   Wifi,
@@ -50,7 +51,7 @@ import { FormEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef,
 import { readDraftRecords, writeDraftRecord } from "./draft-journal";
 import { createDraftBackupSync } from "./draft-backup-sync";
 import { refreshDraftPrices } from "./draft-prices";
-import { applyPromotions, promotionUnitPrice, type Promotions } from './promotional-prices';
+import { adjustedUnitPrice, applyPromotions, displayedAdjustment, itemAdjustment, manualAdjustmentFromDisplay, type Promotions } from './promotional-prices';
 import { compareLotExpiry } from "./stock-lots";
 import { ClientRegistrationForm } from "./client-registration-form";
 import { RegistrationFeedbackPanel } from "./registration-feedback-panel";
@@ -260,14 +261,24 @@ type Client = ApiRow & {
 
 const money = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
-const itemAdjustment = (item: Pick<CartItem, "adjustmentPercent">) => {
-  const value = Number(item.adjustmentPercent || 0);
-  return Number.isFinite(value) ? value : 0;
-};
-const adjustedUnitPrice = (item: Pick<CartItem, "VLRVENDA" | "adjustmentPercent" | "promotionalPrice">) =>
-  promotionUnitPrice(item) * (1 + itemAdjustment(item) / 100);
 const cartItemTotal = (item: CartItem) => adjustedUnitPrice(item) * item.quantity;
 const cartTotal = (cart: CartItem[]) => cart.reduce((sum, item) => sum + cartItemTotal(item), 0);
+
+function OrderAdjustmentField({ item, onEdit, review = false }: { item: CartItem; onEdit: (value: string) => void; review?: boolean }) {
+  const shown = displayedAdjustment(item);
+  return <label className={`item-adjustment${review ? ' review-adjustment' : ''}`}>
+    {!review && <span>− Desc. / + Acrésc.</span>}
+    <input key={shown} type="text" inputMode="decimal" defaultValue={shown}
+      title="Percentual total sobre o preço de tabela. Negativo: desconto; positivo: acréscimo."
+      aria-label={`Desconto ou acréscimo percentual de ${item.DESCRPROD}`}
+      onBlur={event => {
+        const value = event.currentTarget.value;
+        event.currentTarget.value = shown;
+        if (value !== shown) onEdit(value);
+      }} />
+    <b>%</b>
+  </label>;
+}
 
 const compactMoney = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -4572,13 +4583,15 @@ function NewOrderV2({
   const cartItemOf = (product: Product) =>
     cart.find(item => Number(item.CODPROD)===Number(product.CODPROD));
   const setAdjustment = (product: Product, value: string) => {
-    const parsed = Number(value.replace(",", "."));
-    const adjustmentPercent = Number.isFinite(parsed) ? Math.max(-99.99, Math.min(999.99, parsed)) : 0;
     setCart(current => {
-      const target = current.includes(product as CartItem) ? product : current.find(item => Number(item.CODPROD)===Number(product.CODPROD));
+      const target = current.includes(product as CartItem) ? product as CartItem : current.find(item => Number(item.CODPROD)===Number(product.CODPROD));
+      if (!target) return current;
+      const adjustmentPercent = manualAdjustmentFromDisplay(target, value);
+      if (adjustmentPercent === undefined) return current;
       return current.map(item => item===target ? { ...item, adjustmentPercent } : item);
     });
   };
+  const removeCartItem = (index: number) => setCart(current => current.filter((_, rowIndex) => rowIndex !== index));
 
   const openProductDetails = (product: Product) => {
     setProductDetails(product);
@@ -4715,6 +4728,7 @@ function NewOrderV2({
   };
 
   const sendOrder = async () => {
+    if (!cart.length) return;
     if (!pricesReady || pricesError) { setError(pricesError || 'Aguarde a atualização dos preços da tabela.'); return; }
     if (!promotions || promotionsError || cart.some(item => item.promotionError)) {
       setError(promotionsError || cart.find(item => item.promotionError)?.promotionError || 'Aguarde a atualização dos descontos promocionais.');
@@ -4885,16 +4899,21 @@ function NewOrderV2({
             <div className="product-list">
               {!selectedGroups.length && !brand && !search.trim() && !productHighlight ? <div className="empty-state product-filter-empty"><Filter size={22} /> Selecione uma marca, grupo ou pesquise um produto</div> :
                 loadingProducts ? <div className="empty-state"><LoaderCircle className="spin" /> Consultando tabela, estoque e mobilidade...</div> :
-                  products.map((product) => (
+                  products.map((product) => {
+                    const priced = promotionalProduct(product);
+                    const finalPrice = adjustedUnitPrice(priced);
+                    const selected = cartItemOf(product);
+                    return (
                     <article key={product.CODPROD} className={quantityOf(product) ? "selected" : ""}>
                       <button className="product-icon product-image-button" onClick={() => setProductImagePreview(product)} aria-label={`Ampliar imagem de ${product.DESCRPROD}`}><Sprout size={22} /><img src={productImageUrl(product)} alt="" onError={(event) => event.currentTarget.remove()} /></button>
                       <div className="product-info"><button className="product-name-button" onClick={() => openProductDetails(product)} title={`Ver lotes de ${product.DESCRPROD}`}><strong>{product.CODPROD} - {product.DESCRPROD}</strong></button><small>Cód. {product.CODPROD} · {product.CODVOL}{product.MARCA ? ` · ${product.MARCA}` : ""}</small><span className="product-stock"><PackageCheck size={14} /><strong>{Number(product.DISPONIVEL).toLocaleString("pt-BR")}</strong> disponíveis</span></div>
-                      <div className="product-price"><strong>{money(promotionUnitPrice(promotionalProduct(product)))}</strong><small>por {product.CODVOL}{promotionalProduct(product).promotionId ? ' · Promoção' : ''}</small></div>
-                      {quantityOf(product) ? (
-                        <div className="product-order-controls"><div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div><label className="item-adjustment"><span>− Desc. / + Acrésc.</span><input key={`${product.CODPROD}-${product.CODLOCAL}-${product.CONTROLE}-${itemAdjustment(cartItemOf(product) || { adjustmentPercent: 0 })}`} type="text" inputMode="decimal" title="Use negativo para desconto e positivo para acréscimo" defaultValue={itemAdjustment(cartItemOf(product) || { adjustmentPercent: 0 }).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(product, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${product.DESCRPROD}`} /><b>%</b></label></div>
+                      <div className="product-price"><strong>{money(finalPrice)}</strong>{finalPrice < Number(priced.VLRVENDA) - 0.00001 && <small className="product-table-price">Tabela: {money(Number(priced.VLRVENDA))}</small>}<small>por {product.CODVOL}{priced.promotionId ? ' · Promoção' : ''}</small></div>
+                      {selected ? (
+                        <div className="product-order-controls"><div className="quantity"><button onClick={() => setQuantity(product, -1)}><Minus size={16} /></button><strong>{quantityOf(product)}</strong><button onClick={() => setQuantity(product, 1)}><Plus size={16} /></button></div><OrderAdjustmentField item={selected} onEdit={value => setAdjustment(product, value)} /></div>
                       ) : <button className="add-button" onClick={() => setQuantity(product, 1)}><Plus size={17} /> Adicionar</button>}
                     </article>
-                  ))}
+                    );
+                  })}
               {hasMoreProducts && <div ref={productLoadMoreRef} className="product-load-more" aria-live="polite">{loadingMoreProducts && <><LoaderCircle className="spin" size={16} /> Carregando mais produtos...</>}</div>}
               {(selectedGroups.length > 0 || brand || search.trim() || productHighlight) && !loadingProducts && !products.length && <div className="empty-state">Nenhum produto elegível encontrado.</div>}
             </div>
@@ -4906,7 +4925,26 @@ function NewOrderV2({
             <div className="section-heading"><div><span className="eyebrow">Revisão</span><h2>Revise seu pedido</h2><p>Confira as condições e os itens antes de validar o envio.</p></div></div>
             <div className="review-grid">
               <article className="review-client"><div className="review-title"><Building2 size={19} /><strong>Cliente e condições</strong><button onClick={() => goToPhase("header")}>Editar</button></div><h3>{partner.NOMEPARC}</h3><p>Cód. {partner.CODPARC}</p><dl><div><dt>Empresa</dt><dd>{selectedCompany ? `${selectedCompany.CODEMP} — ${selectedCompany.NOMEFANTASIA}` : companyCode}</dd></div><div><dt>Operação</dt><dd>TOP {operation} — {selectedOperation?.DESCROPER || ""}</dd></div><div><dt>Tabela</dt><dd>{selectedTable?.NOMETAB || priceCode}</dd></div><div><dt>Negociação</dt><dd>{selectedNegotiation?.DESCRTIPVENDA || negotiation}</dd></div></dl></article>
-              <article className="review-items"><div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>{cart.map((item) => <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}`}><div><strong>{item.CODPROD} - {item.DESCRPROD}</strong><small>{money(adjustedUnitPrice(item))} / {item.CODVOL}{itemAdjustment(item) ? ` · ${itemAdjustment(item) < 0 ? "Desconto" : "Acréscimo"} ${Math.abs(itemAdjustment(item)).toLocaleString("pt-BR")}%` : ""}</small></div><strong>{money(cartItemTotal(item))}</strong><div className="review-item-controls"><div className="review-item-quantity"><button onClick={() => setQuantity(item, -1)} aria-label={`Diminuir ${item.DESCRPROD}`}><Minus size={14} /></button><strong>{item.quantity}×</strong><button onClick={() => setQuantity(item, 1)} aria-label={`Aumentar ${item.DESCRPROD}`}><Plus size={14} /></button></div><label className="item-adjustment review-adjustment"><input type="text" inputMode="decimal" defaultValue={itemAdjustment(item).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(item, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${item.DESCRPROD}`} /><b>%</b></label></div></div>)}</article>
+              <article className="review-items">
+                <div className="review-title"><ShoppingCart size={19} /><strong>Itens do pedido</strong><button onClick={() => goToPhase("products")}>Editar</button></div>
+                {!cart.length && <p className="review-empty">Nenhum item no carrinho.</p>}
+                {cart.map((item, index) => {
+                  const tablePrice = Number(item.VLRVENDA), finalPrice = adjustedUnitPrice(item);
+                  const hasChange = Math.abs(finalPrice - tablePrice) > 0.00001, hasDiscount = finalPrice < tablePrice;
+                  return <div className="review-item" key={`${item.CODPROD}-${item.CODLOCAL}-${item.CONTROLE}-${index}`}>
+                    <div><strong>{item.CODPROD} - {item.DESCRPROD}</strong><div className="review-unit-prices">
+                      <span>Tabela: {money(tablePrice)}{!hasChange && ` / ${item.CODVOL}`}</span>
+                      {hasChange && <span className={hasDiscount ? 'review-discounted-price' : ''}>{hasDiscount ? 'Com desconto' : 'Preço final'}: {money(finalPrice)} / {item.CODVOL}</span>}
+                    </div></div>
+                    <strong>{money(cartItemTotal(item))}</strong>
+                    <div className="review-item-controls">
+                      <div className="review-item-quantity"><button onClick={() => setQuantity(item, -1)} aria-label={`Diminuir ${item.DESCRPROD}`}><Minus size={14} /></button><strong>{item.quantity}×</strong><button onClick={() => setQuantity(item, 1)} aria-label={`Aumentar ${item.DESCRPROD}`}><Plus size={14} /></button></div>
+                      <OrderAdjustmentField item={item} onEdit={value => setAdjustment(item, value)} review />
+                      <button type="button" className="review-remove-item" title="Remover item" aria-label={`Remover ${item.DESCRPROD} do carrinho`} onClick={() => removeCartItem(index)}><Trash2 size={14} /></button>
+                    </div>
+                  </div>;
+                })}
+              </article>
             </div>
             {observation && <div className="review-observation"><small>Observação</small><p>{observation}</p></div>}
             <div className="order-summary"><span><small>{totalUnits} {totalUnits === 1 ? "unidade" : "unidades"}</small><strong>Total do pedido</strong></span><strong>{money(total)}</strong></div>
@@ -4924,7 +4962,7 @@ function NewOrderV2({
       <footer className={`new-footer ${phase === "review" ? "review-footer" : ""}`}>
         <button className={`secondary ${phase === "review" ? "save-draft-button" : ""}`} onClick={phase === "review" ? saveAndClose : phase === "header" ? closeOrder : () => window.history.back()}>{phase === "review" ? <><FileText size={17} /> Salvar</> : "Voltar"}</button>
         <div className="footer-total">{phase !== "header" && <><small>{totalUnits} itens</small><strong>{money(total)}</strong></>}</div>
-        <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length) || (phase === "review" && !online)} onClick={() => {
+        <button className="primary" disabled={(phase === "header" && (!priceCode || !negotiation || loading)) || (phase === "products" && !cart.length) || (phase === "review" && (!online || !cart.length))} onClick={() => {
           if (phase === "header") goToPhase("products");
           else if (phase === "products") goToPhase("review");
           else openSendConfirmation();
@@ -5020,14 +5058,14 @@ function NewOrderV2({
             <button className="modal-close" onClick={() => setProductDetails(null)} aria-label="Fechar detalhes"><X size={20} /></button>
             <div className="product-details-hero">
               <button className="product-details-image" onClick={() => { setProductImagePreview(productDetails); setProductDetails(null); }} aria-label={`Ampliar imagem de ${productDetails.DESCRPROD}`}><Sprout size={28} /><img src={productImageUrl(productDetails)} alt="" onError={(event) => event.currentTarget.remove()} /></button>
-              <header><span className="eyebrow">Detalhes do produto</span><h2>{productDetails.DESCRPROD}</h2><p>Cód. {productDetails.CODPROD} · {productDetails.CODVOL}{productLots[0]?.REFERENCIA ? ` · Ref. ${productLots[0].REFERENCIA}` : ""}</p><strong className="product-details-price">{money(promotionUnitPrice(promotionalProduct(productDetails)))} <small>por {productDetails.CODVOL}{promotionalProduct(productDetails).promotionId ? ' · Promoção' : ''}</small></strong></header>
+              <header><span className="eyebrow">Detalhes do produto</span><h2>{productDetails.DESCRPROD}</h2><p>Cód. {productDetails.CODPROD} · {productDetails.CODVOL}{productLots[0]?.REFERENCIA ? ` · Ref. ${productLots[0].REFERENCIA}` : ""}</p><strong className="product-details-price">{money(adjustedUnitPrice(promotionalProduct(productDetails)))} <small>por {productDetails.CODVOL}{promotionalProduct(productDetails).promotionId ? ' · Promoção' : ''}</small></strong></header>
             </div>
             <div className="product-details-summary">
               <div className="product-details-total"><PackageCheck size={20} /><span><small>Quantidade total disponível</small><strong>{Number(productDetails.DISPONIVEL).toLocaleString("pt-BR")} {productDetails.CODVOL}</strong></span></div>
               <div className="product-details-order">
                 <span><small>Quantidade no pedido</small>{Number(productDetails.AGRUPMIN || 0) > 1 && <em>Múltiplos de {Number(productDetails.AGRUPMIN).toLocaleString("pt-BR")}</em>}</span>
                 {quantityOf(productDetails) ? (
-                  <div className="product-details-controls"><div className="quantity"><button onClick={() => setQuantity(productDetails, -1)} aria-label={`Diminuir ${productDetails.DESCRPROD}`}><Minus size={17} /></button><strong>{quantityOf(productDetails)}</strong><button onClick={() => setQuantity(productDetails, 1)} aria-label={`Aumentar ${productDetails.DESCRPROD}`}><Plus size={17} /></button></div><label className="item-adjustment"><span>Desc. − / Acrésc. +</span><input type="text" inputMode="decimal" defaultValue={itemAdjustment(cartItemOf(productDetails) || { adjustmentPercent: 0 }).toLocaleString("pt-BR")} onBlur={(event) => setAdjustment(productDetails, event.currentTarget.value)} aria-label={`Desconto ou acréscimo percentual de ${productDetails.DESCRPROD}`} /><b>%</b></label></div>
+                  <div className="product-details-controls"><div className="quantity"><button onClick={() => setQuantity(productDetails, -1)} aria-label={`Diminuir ${productDetails.DESCRPROD}`}><Minus size={17} /></button><strong>{quantityOf(productDetails)}</strong><button onClick={() => setQuantity(productDetails, 1)} aria-label={`Aumentar ${productDetails.DESCRPROD}`}><Plus size={17} /></button></div><OrderAdjustmentField item={cartItemOf(productDetails)!} onEdit={value => setAdjustment(productDetails, value)} /></div>
                 ) : <button className="add-button" onClick={() => setQuantity(productDetails, 1)}><Plus size={17} /> Adicionar</button>}
               </div>
             </div>
