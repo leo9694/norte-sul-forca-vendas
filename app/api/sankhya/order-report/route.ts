@@ -32,10 +32,8 @@ export async function GET(request: Request) {
       return Response.json({ error: "Sem permissão para consultar este pedido." }, { status: 403 });
     }
     const items = await readAllQueryRows(sql => executeQuery(session, sql), `
-      SELECT I.CODPROD, P.DESCRPROD, P.REFERENCIA, I.CODVOL,
-             I.CODLOCALORIG CODLOCAL, I.CONTROLE, I.NUTAB,
-             I.QTDNEG, I.VLRUNIT, I.VLRTOT, NVL(I.VLRDESC,0) VLRDESC,
-             I.NUPROMOCAO, I.PERCDESCPROM, I.PERCDESCDIGITADO
+      SELECT I.CODPROD, P.DESCRPROD, P.REFERENCIA, I.CODVOL, I.QTDNEG
+             ${duplicate ? '' : ', I.CODLOCALORIG CODLOCAL, I.CONTROLE, I.NUTAB, I.VLRUNIT, I.VLRTOT, NVL(I.VLRDESC,0) VLRDESC'}
         FROM TGFITE I JOIN TGFPRO P ON P.CODPROD = I.CODPROD
        WHERE I.NUNOTA = ${id} AND I.SEQUENCIA > 0 ORDER BY I.SEQUENCIA
     `);
@@ -53,9 +51,9 @@ export async function GET(request: Request) {
       priceCode: 0, priceName: "", negotiation: Number(header.CODTIPVENDA),
       negotiationName: String(header.DESCRTIPVENDA || ""), observation: String(header.OBSERVACAO || ""),
       cart: items.map(item => ({ ...item, quantity: Number(item.QTDNEG),
-        VLRVENDA: duplicate ? Number(item.VLRUNIT) : Number(item.QTDNEG) > 0 ? (Number(item.VLRTOT) - Number(item.VLRDESC)) / Number(item.QTDNEG) : Number(item.VLRUNIT),
-        adjustmentPercent: duplicate && (Number(item.NUPROMOCAO) > 0 || Number(item.PERCDESCPROM) > 0) ? -Number(item.PERCDESCDIGITADO || 0)
-          : duplicate && Number(item.QTDNEG) * Number(item.VLRUNIT) > 0 ? ((Number(item.VLRTOT) - Number(item.VLRDESC)) / (Number(item.QTDNEG) * Number(item.VLRUNIT)) - 1) * 100 : 0, DISPONIVEL: 0,
+        ...(duplicate ? { CODLOCAL: 1010101, CONTROLE: ' ', NUTAB: 0 } : {}),
+        VLRVENDA: duplicate ? 0 : Number(item.QTDNEG) > 0 ? (Number(item.VLRTOT) - Number(item.VLRDESC)) / Number(item.QTDNEG) : Number(item.VLRUNIT),
+        adjustmentPercent: 0, DISPONIVEL: 0,
       })),
     } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

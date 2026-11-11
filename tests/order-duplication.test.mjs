@@ -9,12 +9,14 @@ const source = () => ({
   cart: [{ CODPROD: 3799, CONTROLE: 'LOTE-A', CODLOCAL: 1010101, CODVOL: 'UN', VLRVENDA: 20, NUTAB: 100, quantity: 8, adjustmentPercent: -5 },
     { CODPROD: 3799, CONTROLE: 'LOTE-B', CODLOCAL: 1010101, CODVOL: 'UN', VLRVENDA: 20, NUTAB: 100, quantity: 2, adjustmentPercent: -5 }],
 });
-test('same-client duplicate has independent identity and copies all lines, adjustments and conditions', () => {
+test('same-client duplicate copies all quantities and conditions, not old prices, lots or adjustments', () => {
   const original = source(), snapshot = structuredClone(original);
   const copy = duplicateOrder(original, original.partner, 123, 'Vendedor');
   assert.notEqual(copy.id, original.id); assert.match(copy.id, /^draft-/);
   assert.ok(copy.updatedAt > original.updatedAt); assert.equal(copy.phase, 'header');
-  for (const field of ['cart', 'partner', 'operation', 'companyCode', 'priceCode', 'priceName', 'negotiation', 'negotiationName', 'observation']) assert.deepEqual(copy[field], original[field]);
+  for (const field of ['partner', 'operation', 'companyCode', 'priceCode', 'priceName', 'negotiation', 'negotiationName', 'observation']) assert.deepEqual(copy[field], original[field]);
+  assert.deepEqual(copy.cart.map(item => [item.CODPROD,item.quantity]), original.cart.map(item => [item.CODPROD,item.quantity]));
+  assert.ok(copy.cart.every(item => item.adjustmentPercent===0 && item.VLRVENDA===0 && item.NUTAB===0 && !item.CONTROLE.trim()));
   copy.cart[0].quantity = 99; copy.partner.NOMEPARC = 'Alterado';
   assert.deepEqual(original, snapshot);
 });
@@ -23,7 +25,8 @@ test('another client receives the complete copied order but cannot inherit the s
   const copy = duplicateOrder(original, partner, 123, 'Vendedor');
   assert.deepEqual(copy.partner, partner); assert.equal(copy.companyCode, 0);
   assert.equal(copy.priceCode, 0); assert.equal(copy.priceName, '');
-  assert.deepEqual(copy.cart, original.cart); assert.equal(copy.observation, original.observation);
+  assert.deepEqual(copy.cart.map(item => [item.CODPROD,item.quantity]), original.cart.map(item => [item.CODPROD,item.quantity]));
+  assert.ok(copy.cart.every(item => item.adjustmentPercent===0 && item.VLRVENDA===0)); assert.equal(copy.observation, original.observation);
   assert.equal(copy.operation, 6); assert.equal(copy.negotiation, 53);
   assert.notEqual(duplicateOrder(original, partner, 123, 'Vendedor').id, copy.id);
 });

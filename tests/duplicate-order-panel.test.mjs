@@ -56,7 +56,8 @@ test('selecting another client uses only the portfolio and preserves all source 
   find(tree, n => n.type === 'button' && find(n, c => c.type === 'strong' && c.children.includes('Cliente destino'))).props.onClick();
   tree = ui.render(); button(tree, 'Duplicar e revisar').props.onClick(); await tick();
   assert.equal(copies.length, 1); assert.equal(copies[0].partner.CODPARC, 2);
-  assert.deepEqual(copies[0].cart, ui.original.cart); assert.equal(ui.original.partner.CODPARC, 1);
+  assert.deepEqual(copies[0].cart.map(item => [item.CODPROD,item.quantity]), ui.original.cart.map(item => [item.CODPROD,item.quantity]));
+  assert.ok(copies[0].cart.every(item => item.adjustmentPercent===0 && item.VLRVENDA===0)); assert.equal(ui.original.partner.CODPARC, 1);
   assert.equal(copies[0].priceCode, 0);
 });
 

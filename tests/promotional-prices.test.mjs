@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { applyPromotions, promotionUnitPrice } from '../app/promotional-prices.ts';
 import { duplicateOrder } from '../app/order-duplication.ts';
+import { refreshDraftPrices } from '../app/draft-prices.ts';
 const context = { partner: 10, company: 8, table: 4, negotiation: 23, date: '2026-11-09' };
 const item = { CODPROD: 100, CODLOCAL: 1010101, CONTROLE: 'A', CODVOL: 'UN', VLRVENDA: 100, NUTAB: 123, quantity: 5, adjustmentPercent: -10 };
 const rule = { NUPROMOCAO: 774, DTINICIAL: '09062026 00:00:00', DTFINAL: '30122026 00:00:00', PERCENTUAL: 25, CODEMP: 8, GRUPODESCPROD: 'DESC25', GRUPODESCPARC: '***************', GRUPODESCVEND: '***************' };
@@ -42,7 +43,7 @@ test('duplicating the last order for 1193 applies current promotion without touc
   const source = { id: 'sent-1193', updatedAt: 1, phase: 'review', partner: { CODPARC: 1193 }, cart: [item], companyCode: 1, priceCode: 4, priceName: 'Agro', negotiation: 23 };
   const original = structuredClone(source);
   const copy = duplicateOrder(source, source.partner, 4, 'Vendedor');
-  copy.cart = applyPromotions(copy.cart, goldenPromotion(), goldenContext);
+  copy.cart = applyPromotions(refreshDraftPrices(copy.cart,[{...item,CODEMP:1,CODTAB:4,CONTROLE:' '}],1,4,true), goldenPromotion(), goldenContext);
   assert.equal(copy.cart[0].promotionId, 778);
   assert.ok(Math.abs(promotionUnitPrice(copy.cart[0]) - 84.41) < 1e-8);
   assert.deepEqual(source, original);
@@ -95,7 +96,7 @@ test('quantity changes recalculate bands without compounding; fixed promotional 
 test('duplicated order recomputes promotions for destination and does not mutate sent source', () => {
   const source = { id: 'sent-1', updatedAt: 1, phase: 'review', partner: { CODPARC: 10 }, cart: applyPromotions([item], dataset([{ ...rule, CODPARC: 10 }]), context), priceCode: 4, priceName: 'Tabela', companyCode: 8 };
   const copy = duplicateOrder(source, { CODPARC: 11 }, 20, 'Vendedor');
-  copy.cart = applyPromotions(copy.cart, dataset([{ ...rule, CODPARC: 10 }]), { ...context, partner: 11 });
+  copy.cart = applyPromotions(refreshDraftPrices(copy.cart,[{...item,CODEMP:8,CODTAB:4,CONTROLE:' '}],8,4,true), dataset([{ ...rule, CODPARC: 10 }]), { ...context, partner: 11 });
   assert.equal(copy.cart[0].promotionalPrice, 100);
   assert.equal(source.cart[0].promotionalPrice, 75);
   assert.notEqual(copy.id, source.id);
