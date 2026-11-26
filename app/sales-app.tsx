@@ -1216,7 +1216,9 @@ export function SalesApp() {
   const loadInFlightRef = useRef(false);
   const loadAbortRef = useRef<AbortController | null>(null);
   const [unreadMessages, setUnreadMessages] = useState(0);
-  const [canMonitorSales, setCanMonitorSales] = useState(false);
+  const [sellerAccess, setSellerAccess] = useState<{ userId: number; sellers: DashboardSeller[] } | null>(null);
+  const currentSellerAccess = authenticated && sellerAccess?.userId === userId ? sellerAccess : null;
+  const canMonitorSales = Boolean(currentSellerAccess);
   const orderFilters = ordersSelection?.userId === userId && (canMonitorSales || ordersSelection.sellerId === sellerId)
     ? ordersSelection : { sellerId, from: currentMonthStart(), to: inputDate(new Date()) };
 
@@ -1275,19 +1277,21 @@ export function SalesApp() {
     if (!authenticated || !userId) return;
     const permissionKey = `norte-sul-vendas:general-sales:${userId}`;
     if (!online) {
-      setCanMonitorSales(localStorage.getItem(permissionKey) === "true");
+      setSellerAccess((current) => current?.userId === userId ? current
+        : localStorage.getItem(permissionKey) === "true" ? { userId, sellers: [] } : null);
       return;
     }
     let cancelled = false;
-    api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers")
-      .then(() => {
+    api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers", { cache: "no-store" })
+      .then(({ rows }) => {
         if (cancelled) return;
-        setCanMonitorSales(true);
+        setSellerAccess({ userId, sellers: activeSellers(rows) });
         localStorage.setItem(permissionKey, "true");
       })
-      .catch(() => {
-        if (cancelled) return;
-        setCanMonitorSales(false);
+      .catch((error) => {
+        // Uma falha de consulta não invalida uma permissão já confirmada.
+        if (cancelled || !(error instanceof ApiError) || (error.status !== 401 && error.status !== 403)) return;
+        setSellerAccess(null);
         localStorage.removeItem(permissionKey);
         if (screen === "general-sales") navigateTo("home");
       });
@@ -1394,7 +1398,7 @@ export function SalesApp() {
     setSellerId(0);
     setSellerName("");
     setUnreadMessages(0);
-    setCanMonitorSales(false);
+    setSellerAccess(null);
     setOrdersSelection(null);
     setOrderInvoiceSummary(null);
     setPreparedDuplicate(null);
@@ -1776,7 +1780,9 @@ export function SalesApp() {
       setOfflineData(null);
       setDraftBackupIssue("");
       setUnreadMessages(0);
-      setCanMonitorSales(false);
+      setSellerAccess(null);
+      setOrdersSelection(null);
+      setOrderInvoiceSummary(null);
       setScreen("home");
       setLogoutConfirmOpen(false);
       replaceHistoryView("home");
@@ -1879,6 +1885,7 @@ export function SalesApp() {
             offlineData={offlineData}
             online={online}
             canAnalyzeSellers={canMonitorSales}
+            sellers={currentSellerAccess?.sellers ?? []}
             currentSellerId={sellerId}
             currentSellerName={sellerName || user}
             selectedSellerId={orderFilters.sellerId}
@@ -3036,6 +3043,7 @@ function OrdersScreen({
   offlineData,
   online,
   canAnalyzeSellers,
+  sellers,
   currentSellerId,
   currentSellerName,
   selectedSellerId,
@@ -3056,6 +3064,7 @@ function OrdersScreen({
   offlineData: OfflineSnapshot | null;
   online: boolean;
   canAnalyzeSellers: boolean;
+  sellers: DashboardSeller[];
   currentSellerId: number;
   currentSellerName: string;
   selectedSellerId: number;
@@ -3073,7 +3082,6 @@ function OrdersScreen({
   const [showPeriod, setShowPeriod] = useState(false);
   const [dateFrom, setDateFrom] = useState(appliedFrom);
   const [dateTo, setDateTo] = useState(appliedTo);
-  const [sellers, setSellers] = useState<DashboardSeller[]>([]);
   const [draftMenuId, setDraftMenuId] = useState<string | null>(null);
   const [draftPendingDeletion, setDraftPendingDeletion] = useState<OrderDraft | null>(null);
   const [draftPendingSend, setDraftPendingSend] = useState<OrderDraft | null>(null);
@@ -3108,12 +3116,6 @@ function OrdersScreen({
     document.addEventListener("click", closeMenu);
     return () => document.removeEventListener("click", closeMenu);
   }, [draftMenuId]);
-  useEffect(() => {
-    if (!canAnalyzeSellers) return;
-    api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers")
-      .then((result) => setSellers(activeSellers(result.rows)))
-      .catch(() => setSellers([]));
-  }, [canAnalyzeSellers]);
   const applySuggestedPeriod = (from: string, to: string) => {
     setDateFrom(from);
     setDateTo(to);
@@ -3289,12 +3291,13 @@ function OrdersScreen({
           <CalendarDays size={17} /><span>Período</span>
         </button>
       </div>
-      {canAnalyzeSellers && sellers.length > 0 && (
+      {canAnalyzeSellers && (
         <section className="orders-seller-switch">
-          <label><span>Vendedor</span><select value={selectedSellerId} onChange={(event) => {
+          <label><span>Vendedor</span><select value={selectedSellerId} disabled={!online || sellers.length === 0} onChange={(event) => {
             const nextSellerId = Number(event.target.value);
             onPeriodChange(appliedFrom, appliedTo, nextSellerId);
           }}>
+            {!sellers.some((seller) => Number(seller.CODVEND) === selectedSellerId) && <option value={selectedSellerId} disabled>{selectedSellerId === currentSellerId ? currentSellerName : `Vendedor ${selectedSellerId}`}</option>}
             {sellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
           </select></label>
         </section>

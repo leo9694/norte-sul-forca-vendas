@@ -53,7 +53,7 @@ test('late order-filter responses and responses from a logged-out session cannot
   const load=local('loadOrders',{
     ordersRequestRef:{current:0},sessionEpochRef:epoch,sellerId:4,offlineData:null,
     currentMonthStart:()=>'',inputDate:()=>'',api:()=>{const request=deferred();requests.push(request);return request.promise;},
-    setLoadingOrders:value=>events.push(['loading',value]),setOrders:rows=>events.push(['orders',rows]),
+    setLoadingOrders:value=>events.push(['loading',value]),setOrders:rows=>events.push(['orders',rows]),setOrderInvoiceSummary:()=>{},
     setAuthenticated:value=>events.push(['auth',value]),setCheckingSession:()=>{},setUser:()=>{},setUserId:()=>{},setSellerId:()=>{},setSellerName:()=>{},
     setToast:()=>{},getOfflineSnapshot:async()=>null,getLatestOfflineSnapshot:async()=>null,ApiError:class extends Error {},
   });
@@ -71,6 +71,33 @@ test('seller changes persist the order scope and returning reloads the same sell
   assert.deepEqual(selection,{...orderFilters,userId:7,sellerId:8});
   const reload=local('reloadOrderSelection',{orderFilters:selection,loadOrders:(...args)=>calls.push(args)});
   reload();assert.deepEqual(calls,[['2026-10-01','2026-10-31',8],['2026-10-01','2026-10-31',8]]);
+});
+
+test('seller directory survives transient errors and disconnects but is cleared when access is denied',async()=>{
+  const effect=app.body.statements.find(n=>ts.isExpressionStatement(n)&&n.getText(ast).includes('const permissionKey'));
+  assert.doesNotMatch(effect.expression.arguments[1].getText(ast),/screen/);
+  const requests=[],storage=new Map();let access=null;
+  class ApiError extends Error { constructor(status){super();this.status=status;} }
+  const start=(online=true,userId=7)=>{
+    const bindings={authenticated:true,online,userId,screen:'orders',ApiError,navigateTo:()=>{},
+      activeSellers:rows=>rows.filter(row=>row.ATIVO==='S'),
+      api:()=>{const request=deferred();requests.push(request);return request.promise;},
+      setSellerAccess:value=>{access=typeof value==='function'?value(access):value;},
+      localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
+    };
+    const code=compile('const effect='+effect.expression.arguments[0].getText(ast)+';');
+    return new Function(...Object.keys(bindings),code+';return effect();')(...Object.values(bindings));
+  };
+  const active={CODVEND:8,ATIVO:'S'};
+  start();requests.shift().resolve({rows:[active,{CODVEND:9,ATIVO:'N'}]});await Promise.resolve();
+  assert.deepEqual(access,{userId:7,sellers:[active]});
+  start(false);assert.deepEqual(access.sellers,[active]);
+  start();requests.shift().reject(Error('connection'));await Promise.resolve();await Promise.resolve();
+  assert.deepEqual(access.sellers,[active]);
+  start();requests.shift().reject(new ApiError(403));await Promise.resolve();await Promise.resolve();
+  assert.equal(access,null);assert.equal(storage.size,0);
+  const cancel=start(true,8);cancel();requests.shift().resolve({rows:[active]});await Promise.resolve();
+  assert.equal(access,null);
 });
 
 test('opening a prepared duplicate makes no repeat price/promotion calls; changing the table refreshes prices',async()=>{

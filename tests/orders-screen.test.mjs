@@ -17,13 +17,13 @@ const props={
     {NUNOTA:102,CODPARC:12,NOMEPARC:'Cliente em conferência',CODTIPOPER:6,DTNEG:'12/11/2026',STATUS_CONFERENCIA:'D',NFE_DISPONIVEL:'S',BOLETO_DISPONIVEL:'S',VLRNOTA:780},
   ],
   drafts:[{id:'draft-1',partner:{CODPARC:13,NOMEPARC:'Cliente do rascunho'},updatedAt:1794470400000,cart:[],sellerName:'Representante 01'}],
-  online:true,currentSellerId:1,currentSellerName:'Representante 01',loading:false,canAnalyzeSellers:false,selectedSellerId:1,appliedFrom:'2026-11-01',appliedTo:'2026-11-26',
+  online:true,currentSellerId:1,currentSellerName:'Representante 01',loading:false,canAnalyzeSellers:false,sellers:[],selectedSellerId:1,appliedFrom:'2026-11-01',appliedTo:'2026-11-26',
 };
 const money=value=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 export function renderOrders(overrides={},filter='Todos',withPeriod=false){
   let hook=0;
   const bindings={Barcode,CalendarDays,CheckCircle2,ChevronRight,CircleDollarSign,Copy,FileText,LoaderCircle,MoreVertical,Plus,Search,Send,...status,React,useRef:React.useRef,useEffect:React.useEffect,
-    useState:initial=>React.useState(++hook===2?filter:hook===3?withPeriod:hook===6&&overrides.canAnalyzeSellers?[{CODVEND:1,APELIDO:'Gerente'},{CODVEND:8,APELIDO:'Representante 08'}]:initial),
+    useState:initial=>React.useState(++hook===2?filter:hook===3?withPeriod:initial),
     BrandMark:()=>null,currentMonthStart:()=> '2026-11-01',inputDate:()=> '2026-11-26',
     sankhyaDate:value=>value||'—',cartTotal:()=>120,money};
   const Component=new Function(...Object.keys(bindings),code+';return OrdersScreen;')(...Object.values(bindings));
@@ -55,7 +55,16 @@ test('draft filter hides sent loading state and date panel has one current-month
 });
 
 test('reopening Orders uses the seller and period held by the parent, not the login seller',()=>{
-  const html=renderOrders({canAnalyzeSellers:true,selectedSellerId:8,appliedFrom:'2026-10-01',appliedTo:'2026-10-31'},'Todos',true);
+  const sellers=[{CODVEND:1,APELIDO:'Gerente'},{CODVEND:8,APELIDO:'Representante 08'}];
+  const html=renderOrders({canAnalyzeSellers:true,sellers,selectedSellerId:8,appliedFrom:'2026-10-01',appliedTo:'2026-10-31'},'Todos',true);
   assert.match(html,/<option value="8" selected="">Representante 08<\/option>/);
   assert.match(html,/value="2026-10-01"/);assert.match(html,/value="2026-10-31"/);
+  assert.doesNotMatch(code,/kind=dashboardSellers/);
+  assert.doesNotMatch(renderOrders({sellers}),/orders-seller-switch/);
+});
+
+test('an authorized seller filter stays visible without options and while offline',()=>{
+  assert.match(renderOrders({canAnalyzeSellers:true,selectedSellerId:8}),/<span>Vendedor<\/span><select disabled=""><option value="8" disabled="" selected="">Vendedor 8/);
+  const sellers=[{CODVEND:8,APELIDO:'Representante 08'}];
+  assert.match(renderOrders({canAnalyzeSellers:true,sellers,selectedSellerId:8,online:false}),/<select disabled=""><option value="8" selected="">Representante 08/);
 });
