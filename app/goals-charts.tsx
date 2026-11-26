@@ -15,14 +15,15 @@ function Curve({title,labels,series,columns=false,showHeading=true}:{title:strin
   </svg><div className="goal-chart-legend">{series.map(s=><button key={s.name} aria-pressed={!hidden.includes(s.name)} onClick={()=>setHidden(h=>h.includes(s.name)?h.filter(n=>n!==s.name):[...h,s.name])}><i style={{background:s.color}}/>{s.name}</button>)}</div>{hover!==null&&<div className="goal-chart-tooltip" role="status">{labels[hover]} · {visible.map(s=>`${s.name}: ${s.values[hover]===null?'—':money(s.values[hover]!)}`).join(' · ')}</div>}</div>;
 }
 export { Curve as GoalTimeChart };
-function Bars({title,rows,onSelect}:{title:string;rows:{key:string;name:string;target:number|null;actual:number}[];onSelect?:(key:string)=>void}){
+function Bars({title,rows,onSelect,limit}:{title:string;rows:{key:string;name:string;target:number|null;actual:number}[];onSelect?:(key:string)=>void;limit?:number}){
   const max=Math.max(1,...rows.flatMap(r=>[r.target||0,r.actual]));
   const Row=onSelect?'button':'div';
-  return <div className="goal-chart"><h3>{title}</h3>{rows.length?rows.map(r=><Row className="goal-bar-row" key={r.key} onClick={onSelect?()=>onSelect(r.key):undefined} title={`${r.name}: meta ${r.target===null?'não cadastrada':money(r.target)}, realizado ${money(r.actual)}${r.target?`, ${Math.round(r.actual/r.target*100)}%`:''}`}><span>{r.name}</span><div><i className="goal-bar-target" style={{width:`${Math.max(0,(r.target||0)/max*100)}%`}}/><i className="goal-bar-actual" style={{width:`${Math.max(0,r.actual/max*100)}%`}}/></div><small>{money(r.actual)} / {r.target===null?'—':money(r.target)}</small></Row>):<p className="goals-note">Sem movimentação ou meta cadastrada no período.</p>}<p className="goals-note">Verde: realizado · cinza: meta.{onSelect?' Clique para filtrar.':''}</p></div>;
+  return <div className="goal-chart"><h3>{title}</h3>{rows.length?(limit===undefined?rows:rows.slice(0,limit)).map(r=><Row className="goal-bar-row" key={r.key} onClick={onSelect?()=>onSelect(r.key):undefined} title={`${r.name}: meta ${r.target===null?'não cadastrada':money(r.target)}, realizado ${money(r.actual)}${r.target?`, ${Math.round(r.actual/r.target*100)}%`:''}`}><span>{r.name}</span><div><i className="goal-bar-target" style={{width:`${Math.max(0,(r.target||0)/max*100)}%`}}/><i className="goal-bar-actual" style={{width:`${Math.max(0,r.actual/max*100)}%`}}/></div><small>{money(r.actual)} / {r.target===null?'—':money(r.target)}</small></Row>):<p className="goals-note">Sem movimentação ou meta cadastrada no período.</p>}<p className="goals-note">Verde: realizado · cinza: meta.{onSelect?' Clique para filtrar.':''}</p></div>;
 }
 export function GoalCharts({data,summary,start,end,individual,onFilter,allowDrilldown=true,historyReady=true,historyError='',onHistoryNeeded}:{data:CentralData;summary:Summary;start:string;end:string;individual:boolean;onFilter:(key:keyof GoalFilters,value:string)=>void;allowDrilldown?:boolean;historyReady?:boolean;historyError?:string;onHistoryNeeded?:()=>void}){
   const [historyOpen,setHistoryOpen]=useState(false);
   const [performanceOpen,setPerformanceOpen]=useState(false);
+  const [showAllCategories,setShowAllCategories]=useState(false);
   useEffect(()=>{if(historyOpen)onHistoryNeeded?.();},[historyOpen,onHistoryNeeded]);
   const today=goalToday(),days:number[]=[],labels:string[]=[];for(let d=new Date(start+'T12:00:00Z');d.toISOString().slice(0,10)<=end;d.setUTCDate(d.getUTCDate()+1)){const date=d.toISOString().slice(0,10);days.push(Number(date.slice(8)));labels.push(date);}
   const current=summary.facts,target=summary.totals.target||0;
@@ -38,18 +39,17 @@ export function GoalCharts({data,summary,start,end,individual,onFilter,allowDril
   });
   const ideal=pace.map(fraction=>target*fraction),projected=pace.map((fraction,i)=>labels[i]<today?null:summary.totals.projection*fraction);
   const visibleIds=new Set(summary.rows.map(r=>r.seller.id));
-  const dimension=(kind:'brand'|'group'|'region')=>{
-    const regions=new Map(summary.rows.map(r=>[r.seller.id,r.seller.region]));
+  const dimension=(kind:'brand'|'group')=>{
     const groups=new Map(data.catalog.groups.map(g=>[String(g.id),g.name]));
     const targets=data.campaigns.filter(c=>campaignMatches(c,summary.filters,start,end)&&c.start===start&&c.end===end&&c.assignments.some(a=>visibleIds.has(a.sellerId)));
-    const names=kind==='region'?[...new Set(summary.rows.map(r=>r.seller.region))]:[...new Set([...current.map(f=>String(f[kind])),...targets.filter(c=>c.type===kind).map(c=>String(c[kind]))])];
-    const rows=new Map(names.map(key=>[key,{key,name:kind==='group'?groups.get(key)||key:key,target:null as number|null,actual:0}]));
-    for(const f of current){const row=rows.get(kind==='region'?regions.get(f.sellerId)??'':String(f[kind]));if(row)row.actual+=f.actual;}
+    const names=new Set([...current.map(f=>String(f[kind])),...targets.filter(c=>c.type===kind).map(c=>String(c[kind]))]);
+    const rows=new Map([...names].map(key=>[key,{key,name:kind==='group'?groups.get(key)||key:key,target:null as number|null,actual:0}]));
+    for(const f of current){const row=rows.get(String(f[kind]));if(row)row.actual+=f.actual;}
     if(!summary.filters.state)for(const c of targets){
-      if(c.type!==(kind==='region'?'general':kind))continue;
+      if(c.type!==kind)continue;
       for(const a of c.assignments){
         if(!visibleIds.has(a.sellerId))continue;
-        const row=rows.get(kind==='region'?regions.get(a.sellerId)??'':String(c[kind]));
+        const row=rows.get(String(c[kind]));
         if(row)row.target=(row.target??0)+a.targetCents/100;
       }
     }
@@ -65,10 +65,12 @@ export function GoalCharts({data,summary,start,end,individual,onFilter,allowDril
   const annual=(y:string)=>months.map(m=>{const first=`${y}-${m}-01`;if(first>today)return null;const limitMonth=monthPeriod(`${y}-${m}`).end;const cutoff=year===today.slice(0,4)&&m===today.slice(5,7)?`${y}-${m}-${today.slice(8)}`:limitMonth;return summary.filteredFacts.filter(f=>f.date>=first&&f.date<=today&&f.date<=(cutoff<limitMonth?cutoff:limitMonth)).reduce((s,f)=>s+f.actual,0);});
   const distribution=(Object.keys(performanceLabels) as Performance[]).map((key,i)=>({key,color:colors[i],count:summary.rows.filter(r=>r.performance===key).length}));let turn=0;const slices=distribution.map(d=>{const begin=turn;turn+=d.count/Math.max(1,summary.rows.length)*360;return `${d.color} ${begin}deg ${turn}deg`;});
   const LegendItem=allowDrilldown?'button':'span';
-  const performancePanels=(individual||performanceOpen)&&<div className="goals-chart-grid">{!individual&&<Bars title="Regional" rows={dimension('region')} onSelect={allowDrilldown?key=>onFilter('region',key):undefined}/>}<Bars title="Marca" rows={dimension('brand')} onSelect={individual||!allowDrilldown?undefined:key=>onFilter('brand',key)}/><Bars title="Grupo de produtos" rows={dimension('group')} onSelect={individual||!allowDrilldown?undefined:key=>onFilter('group',key)}/></div>;
+  const brands=individual||performanceOpen?dimension('brand'):[],groups=individual||performanceOpen?dimension('group'):[];
+  const compactLimit=3,categoryLimit=individual&&!showAllCategories?compactLimit:undefined;
+  const performancePanels=(individual||performanceOpen)&&<div className="goals-chart-grid"><Bars title="Marca" rows={brands} limit={categoryLimit} onSelect={individual||!allowDrilldown?undefined:key=>onFilter('brand',key)}/><Bars title="Grupo de produtos" rows={groups} limit={categoryLimit} onSelect={individual||!allowDrilldown?undefined:key=>onFilter('group',key)}/></div>;
   return <>
     <div className={`goals-chart-grid goal-overview-charts${individual?' individual':''}`}><section className="goal-panel"><Curve title="Evolução acumulada do faturamento" labels={days.map(String)} series={[{name:'Realizado',color:colors[0],values:actual},{name:'Meta ideal',color:colors[1],values:ideal},{name:'Projeção',color:colors[2],values:projected},{name:'Meta total',color:'#9aa7a1',values:labels.map(()=>target)}]}/></section>{!individual&&<section className="goal-panel goal-distribution"><h3>Ritmo dos vendedores</h3><div className="goal-distribution-body"><div className="goal-donut" style={{background:`conic-gradient(${slices.join(',')})`}} role="img" aria-label={distribution.map(d=>`${performanceLabels[d.key]}: ${d.count}`).join(', ')}><span>{summary.rows.length}<small>vendedores</small></span></div><div className="goal-chart-legend">{distribution.map(d=><LegendItem key={d.key} onClick={allowDrilldown?()=>onFilter('performance',d.key):undefined}><i style={{background:d.color}}/>{performanceLabels[d.key]} ({d.count})</LegendItem>)}</div></div></section>}</div>
-    {individual?<section className="goal-panel" aria-label="Desempenho por marca e grupo"><h2>Desempenho por marca e grupo</h2>{performancePanels}</section>:<details className="goal-panel" onToggle={e=>setPerformanceOpen(e.currentTarget.open)}><summary>Desempenho por regional, marca e grupo</summary>{performancePanels}</details>}
+    {individual?<section className="goal-panel" aria-label="Desempenho por marca e grupo"><h2>Desempenho por marca e grupo</h2>{performancePanels}{(brands.length>compactLimit||groups.length>compactLimit)&&<div className="goal-category-actions"><button type="button" className="secondary" aria-expanded={showAllCategories} onClick={()=>setShowAllCategories(value=>!value)}>{showAllCategories?"Mostrar menos":"Saiba mais"}</button></div>}</section>:<details className="goal-panel" onToggle={e=>setPerformanceOpen(e.currentTarget.open)}><summary>Desempenho por marca e grupo</summary>{performancePanels}</details>}
     <details className="goal-panel" onToggle={e=>setHistoryOpen(e.currentTarget.open)}><summary>Histórico de metas e comparativo anual</summary>{historyOpen&&(!historyReady?<p className="goals-note" role="status">{historyError||'Carregando histórico e comparativos…'}</p>:<><div className="goals-chart-grid"><Curve columns title="Últimos 12 meses" labels={history.map(m=>m.slice(5)+'/'+m.slice(0,4))} series={[{name:'Realizado',color:colors[0],values:monthly},{name:'Meta',color:colors[1],values:historicTargets}]}/><Curve title="Comparativo anual" labels={months} series={[{name:year,color:colors[0],values:annual(year)},{name:String(Number(year)-1),color:colors[1],values:annual(String(Number(year)-1))}]}/></div><div className="goals-table-scroll"><table className="goals-table"><thead><tr><th>Mês</th><th>Meta</th><th>Realizado</th><th>Atingido</th><th>Crescimento anual</th><th>Situação</th></tr></thead><tbody>{history.map((month,i)=>{const period=monthPeriod(month),previous=summary.filteredFacts.filter(f=>f.date.startsWith(`${Number(month.slice(0,4))-1}${month.slice(4)}`)&&(!month.startsWith(today.slice(0,7))||Number(f.date.slice(8))<=Number(today.slice(8)))).reduce((s,f)=>s+f.actual,0),m=goalMetrics(monthly[i],0,historicTargets[i],period.start,period.end,data.settings,today,previous);return <tr key={month}><td>{month.split('-').reverse().join('/')}</td><td>{historicTargets[i]===null?'—':money(historicTargets[i]!)}</td><td>{money(monthly[i])}</td><td>{historicTargets[i]===null?'—':`${Math.round(m.percent)}%`}</td><td>{m.growth===null?'—':`${m.growth.toFixed(1)}%`}</td><td>{performanceLabels[m.performance]}</td></tr>;})}</tbody></table></div><p className="goals-note">No mês em andamento, a comparação anual considera o mesmo dia de corte. Meta histórica exibida apenas para períodos mensais completos equivalentes.</p></>)}</details>
   </>;
 }

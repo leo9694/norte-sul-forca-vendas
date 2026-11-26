@@ -913,6 +913,8 @@ textarea:focus { border-color: var(--green); }
 .goal-bar-row > div { position:relative; height:17px; background:#f6f8f7; border-radius:3px; overflow:hidden; }
 .goal-bar-row i { position:absolute; display:block; left:0; height:8px; min-width:0; }.goal-bar-target { top:0; background:#becfc5; }.goal-bar-actual { bottom:0; background:#00855b; }
 .goal-bar-row small { font-size:10px; color:var(--muted); }
+.goal-category-actions { display:flex; justify-content:center; margin-top:12px; }
+.goal-category-actions .secondary { min-width:130px; font-size:12px; }
 .goals-inline-notice { background:#edf7f1; border-radius:9px; padding:12px; font-size:12px; color:var(--green); }
 .goals-matrix th:first-child { position:sticky; left:0; z-index:1; background:#f7faf8; min-width:175px; }
 .goals-matrix td > div { display:flex; gap:7px; align-items:center; }.goals-matrix td input:not([type="checkbox"]) { width:125px; text-align:right; }

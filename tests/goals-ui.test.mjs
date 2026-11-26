@@ -271,3 +271,38 @@ test('navigation stays before Comunicação, with responsive matrix and compact 
   const source=await readFile(new URL('../app/sales-app.tsx',import.meta.url),'utf8');for(const name of ['DesktopSidebar','MobileNav']){const start=source.indexOf(`function ${name}`),end=source.indexOf('\nfunction ',start+1),section=source.slice(start,end===-1?undefined:end);assert.ok(section.indexOf('onClick={onGoals}')<section.indexOf('onClick={onCommunication}'));}
   const css=await readFile(new URL('../app/globals.css',import.meta.url),'utf8');assert.match(css,/\.goals-table-scroll \{ overflow:auto/);assert.match(css,/@media\(max-width:600px\)/);assert.match(css,/\.goals-page \[hidden\]/);
 });
+
+test('individual performance previews three brands and three groups and expands the rest together',async()=>{
+  const h=hooks(),{GoalCharts}=await load('../app/goals-charts.tsx',{'react':h.react,'react/jsx-runtime':jsx,'./goals-central-model':model});
+  const facts=[4,1,5,2,3].map(id=>({date:'2026-11-04',sellerId:4,company:1,brand:'Marca '+id,group:id,state:'MT',actual:id*100,wallet:0}));
+  const payload={...data,catalog:{...data.catalog,groups:facts.map(f=>({id:f.group,name:'Grupo '+f.group}))}};
+  const summary=model.summarizeGoals(payload,facts,{...model.emptyGoalFilters,seller:'4'},'2026-11-01','2026-11-30','2026-11-25');
+  const render=()=>{h.reset();return GoalCharts({data:payload,summary,start:'2026-11-01',end:'2026-11-30',individual:true,onFilter(){}});};
+  const rows=(tree,title)=>{
+    const chart=find(tree,n=>n.props.title===title&&Array.isArray(n.props.rows));
+    const html=renderToStaticMarkup(chart.type(chart.props));
+    return [...html.matchAll(/<span>((?:Marca|Grupo) \d)<\/span>/g)].map(m=>m[1]);
+  };
+  let tree=render();
+  assert.deepEqual(rows(tree,'Marca'),['Marca 5','Marca 4','Marca 3']);
+  assert.deepEqual(rows(tree,'Grupo de produtos'),['Grupo 5','Grupo 4','Grupo 3']);
+  const more=find(tree,n=>n.type==='button'&&text(n)==='Saiba mais');
+  assert.equal(more.props['aria-expanded'],false);more.props.onClick();tree=render();
+  assert.deepEqual(rows(tree,'Marca'),['Marca 5','Marca 4','Marca 3','Marca 2','Marca 1']);
+  assert.deepEqual(rows(tree,'Grupo de produtos'),['Grupo 5','Grupo 4','Grupo 3','Grupo 2','Grupo 1']);
+  const less=find(tree,n=>n.type==='button'&&text(n)==='Mostrar menos');
+  assert.equal(less.props['aria-expanded'],true);less.props.onClick();tree=render();
+  assert.equal(rows(tree,'Marca').length,3);
+});
+
+test('general performance details display brands and product groups without a regional chart',async()=>{
+  const h=hooks(),{GoalCharts}=await load('../app/goals-charts.tsx',{'react':h.react,'react/jsx-runtime':jsx,'./goals-central-model':model});
+  const summary=model.summarizeGoals(data,[],model.emptyGoalFilters,'2026-11-01','2026-11-30');
+  const render=()=>{h.reset();return GoalCharts({data,summary,start:'2026-11-01',end:'2026-11-30',individual:false,onFilter(){}});};
+  const panel=tree=>find(tree,n=>n.type==='details'&&find(n,k=>k.type==='summary'&&text(k)==='Desempenho por marca e grupo'));
+  panel(render()).props.onToggle({currentTarget:{open:true}});
+  const html=renderToStaticMarkup(panel(render()));
+  assert.match(html,/<h3>Marca<\/h3>/);
+  assert.match(html,/<h3>Grupo de produtos<\/h3>/);
+  assert.doesNotMatch(html,/<h3>Regional<\/h3>/);
+});
