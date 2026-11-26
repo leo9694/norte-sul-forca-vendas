@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { duplicateOrder } from '../app/order-duplication.ts';
+import { duplicateOrder, duplicatePricingKey } from '../app/order-duplication.ts';
+
+test('prepared prices are reusable only for the same customer, company, table and products', () => {
+  const key = duplicatePricingKey(5, 1, 4, [{CODPROD:20},{CODPROD:10},{CODPROD:20}]);
+  assert.equal(key, duplicatePricingKey(5, 1, 4, [{CODPROD:10},{CODPROD:20}]));
+  assert.notEqual(key, duplicatePricingKey(6, 1, 4, [{CODPROD:10},{CODPROD:20}]));
+  assert.notEqual(key, duplicatePricingKey(5, 8, 4, [{CODPROD:10},{CODPROD:20}]));
+  assert.notEqual(key, duplicatePricingKey(5, 1, 6, [{CODPROD:10},{CODPROD:20}]));
+  assert.notEqual(key, duplicatePricingKey(5, 1, 4, [{CODPROD:10}]));
+});
 
 const source = () => ({
   id: 'original', updatedAt: 1000, phase: 'review', sellerId: 123, sellerName: 'Vendedor',

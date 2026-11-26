@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { applyPromotions } from '../app/promotional-prices.ts';
 import { refreshDraftPrices } from '../app/draft-prices.ts';
-import { duplicateOrder } from '../app/order-duplication.ts';
+import { duplicateOrder, duplicatePricingKey } from '../app/order-duplication.ts';
 
 test('promotion load normalizes the partner-group join and includes pricing metadata for products copied from old orders', async () => {
   const source = await readFile(new URL('../app/api/_lib/promotions.ts', import.meta.url), 'utf8');
@@ -55,16 +55,17 @@ test('1058 duplicate uses fresh table price and promotion without carrying the o
     if (url.includes('order-prices')) { events.push('prices'); return { company:1,priceCode:4,priceName:'Agro',rows:[{CODEMP:1,CODTAB:4,CODPROD:1058,CODLOCAL:1010101,CONTROLE:' ',VLRVENDA:4.49,NUTAB:200}] }; }
     events.push('fetch'); assert.match(url, /seller=4/); return data;
   };
-  let saved;
+  let saved, prepared;
   const noop = () => {};
-  const create = fetch => new Function('online', 'sellerId', 'offlineData', 'api', 'applyPromotions', 'saveDraft', 'setActiveDraft', 'setStartingPartner', 'setOrderSellerId', 'setOrderSellerName', 'sellerName', 'pushHistoryView', 'setScreen', 'setToast', 'refreshDraftPrices', js + '; return duplicate;')(
-    true, 1, { promotions: { ...data, rules: [] } }, fetch, applyPromotions, async value => { saved = value; events.push('save'); }, noop, noop, noop, noop, 'Gestor', noop, noop, noop, refreshDraftPrices);
+  const create = fetch => new Function('online', 'sellerId', 'offlineData', 'api', 'applyPromotions', 'saveDraft', 'setActiveDraft', 'setStartingPartner', 'setOrderSellerId', 'setOrderSellerName', 'sellerName', 'pushHistoryView', 'setScreen', 'setToast', 'refreshDraftPrices', 'setPreparedDuplicate', 'duplicatePricingKey', js + '; return duplicate;')(
+    true, 1, { promotions: { ...data, rules: [] } }, fetch, applyPromotions, async value => { saved = value; events.push('save'); }, noop, noop, noop, noop, 'Gestor', noop, noop, noop, refreshDraftPrices, value=>{prepared=value;}, duplicatePricingKey);
   await create(api)(draft);
   assert.deepEqual(events, ['prices', 'fetch', 'save']);
   assert.equal(saved.cart[0].promotionId, 778);
   assert.equal(saved.cart[0].VLRVENDA, 4.49);
   assert.equal(saved.cart[0].adjustmentPercent, 0);
   assert.equal(saved.cart[0].promotionalPrice.toFixed(2), '3.79');
+  assert.deepEqual(prepared,{draftId:draft.id,sellerId:4,online:true,priceKey:duplicatePricingKey(draft.partner.CODPARC,1,4,saved.cart),promotions:data});
   assert.equal((saved.cart[0].promotionalPrice * saved.cart[0].quantity).toFixed(2), '37.90');
   assert.equal(original.cart[0].adjustmentPercent, 18.47);
   saved = null;

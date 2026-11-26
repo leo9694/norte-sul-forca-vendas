@@ -7,7 +7,7 @@ import { RegistrationFeedbackPanel } from './registration-feedback-panel';
 
 type City = { CODCID: number; NOMECID: string; UF: string; CODMUNFIS: number };
 type Profile = { CODTIPPARC: number; DESCRTIPPARC: string };
-const steps = ['Dados básicos', 'Perfil principal', 'Contatos', 'Endereço'];
+const steps = ['Dados', 'Perfil', 'Contatos', 'Endereço'];
 const states = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
 
 function Field({ label, value, onChange, onBlur, required = false, maxLength, type = 'text', disabled = false }: {
@@ -171,18 +171,18 @@ export function ClientRegistrationForm({ userId, sessionSellerId, sellerId, sell
 
   return <div className="modal-backdrop registration-backdrop" role="dialog" aria-modal="true" aria-labelledby="registration-title">
     <section className="registration-panel">
-      <header><div><span className="eyebrow">Carteira de {sellerName}</span><h2 id="registration-title">Novo cliente</h2></div><button type="button" className="icon-button" disabled={saving} aria-label="Fechar e limpar cadastro" onClick={close}><X /></button></header>
+      <header><div><h2 id="registration-title">Novo cliente</h2><small className="client-detail-code">Carteira de {sellerName}</small></div><button type="button" className="icon-button" disabled={saving} aria-label="Fechar e limpar cadastro" onClick={close}><X /></button></header>
       <ol className="registration-steps" aria-label="Etapas do cadastro">{steps.map((label, index) => <li key={label} className={index === step ? 'active' : index < step ? 'complete' : ''} aria-current={index === step ? 'step' : undefined}><span>{index < step ? <Check size={17} /> : index + 1}</span><small>{label}</small></li>)}</ol>
       <form onSubmit={submit}>
         <div className="registration-body" ref={bodyRef}>
-          <p className="registration-hint">{steps[step]} · Etapa {step + 1} de 4. Campos com * são obrigatórios.</p>
+          <p className="registration-hint registration-required">* Campos obrigatórios</p>
           {recovery && recovery.data.requestId !== data.requestId && <div className="registration-notice">Existe um envio anterior interrompido. Para concluir sem duplicar o cliente: <button type="button" className="secondary" disabled={saving || !!lookup} onClick={() => {
             lookupVersion.current++; setData(recovery.data); setStep(recovery.step); setPartnerId(recovery.partnerId); setUncertain(recovery.uncertain); setError(''); setNotice('Envio anterior recuperado.');
           }}>Retomar envio anterior</button></div>}
-          {!online && <div className="global-error" role="status">Sem internet. Você pode preencher o formulário; consultas e envio estarão disponíveis ao reconectar.</div>}
+          {!online && <div className="global-error" role="status">Você pode preencher sem internet. Consultas e envio exigem conexão.</div>}
           {partnerId > 0 && <div className="registration-notice">Cliente {partnerId} já criado. Complete os contatos e continue para finalizar, sem criar outro cliente.</div>}
           {step === 0 && <>
-            <div className="registration-person"><span>Tipo de cadastro: <strong>Cliente</strong></span><label><input type="radio" checked={data.personType === 'F'} disabled={locked} onChange={() => update('personType', 'F')} />Pessoa Física</label><label><input type="radio" checked={data.personType === 'J'} disabled={locked} onChange={() => update('personType', 'J')} />Pessoa Jurídica</label></div>
+            <div className="registration-person" role="group" aria-label="Tipo de pessoa"><label><input type="radio" checked={data.personType === 'F'} disabled={locked} onChange={() => update('personType', 'F')} />Pessoa física</label><label><input type="radio" checked={data.personType === 'J'} disabled={locked} onChange={() => update('personType', 'J')} />Pessoa jurídica</label></div>
             <fieldset disabled={locked} className="registration-grid">
               <div className="registration-lookup"><Field label={data.personType === 'J' ? 'CNPJ' : 'CPF'} value={data.document} maxLength={18} onChange={v => update('document', v)} onBlur={() => { if (data.personType === 'J' && cleanDocument(data.document).length === 14) void findDocument('cnpj'); }} />{data.personType === 'J' && <button type="button" className="secondary" disabled={!online || !!lookup} onClick={() => void findDocument('cnpj')}>{lookup === 'cnpj' ? <LoaderCircle className="spin" size={17} /> : <Search size={17} />} Consultar</button>}</div>
               <Field label="Inscrição estadual" value={data.stateRegistration} maxLength={17} onChange={v => update('stateRegistration', v)} />
@@ -196,7 +196,6 @@ export function ClientRegistrationForm({ userId, sessionSellerId, sellerId, sell
           </>}
           {step === 1 && <fieldset disabled={locked} className="registration-grid">
             <label className="registration-field"><span>Perfil principal *</span><select required value={data.profileId || ''} disabled={locked || profilesLoading} onChange={e => update('profileId', Number(e.target.value))}><option value="">{profilesLoading ? 'Carregando perfis...' : 'Selecione o perfil'}</option>{profiles.map(profile => <option key={profile.CODTIPPARC} value={profile.CODTIPPARC}>{profile.DESCRTIPPARC}</option>)}</select></label>
-            <p className="registration-hint">O perfil será gravado no cadastro principal do cliente no Sankhya.</p>
             {!profilesLoading && !profiles.length && <button type="button" className="secondary" disabled={!online} onClick={() => setProfilesVersion(v => v + 1)}>Recarregar perfis</button>}
           </fieldset>}
           {step === 2 && <>
@@ -222,7 +221,7 @@ export function ClientRegistrationForm({ userId, sessionSellerId, sellerId, sell
           </fieldset>}
           {notice && <div className="registration-notice" role="status">{notice}</div>}
         </div>
-        <footer><span>Ao fechar, os campos deste cadastro serão limpos.</span><div>{step > 0 && <button className="secondary" type="button" disabled={saving} onClick={() => { setStep(step - 1); setError(''); }}><ArrowLeft size={16} /> Voltar</button>}<button type="submit" className="primary" disabled={saving || !!lookup || uncertain || (step === 1 && (profilesLoading || !profiles.length))}>{saving ? <><LoaderCircle size={18} className="spin" /> Salvando...</> : step === 3 ? 'Salvar cliente' : 'Continuar'}</button></div></footer>
+        <footer><span>Fechar limpa o formulário.</span><div>{step > 0 && <button className="secondary" type="button" disabled={saving} onClick={() => { setStep(step - 1); setError(''); }}><ArrowLeft size={16} /> Voltar</button>}<button type="submit" className="primary" disabled={saving || !!lookup || uncertain || (step === 1 && (profilesLoading || !profiles.length))}>{saving ? <><LoaderCircle size={18} className="spin" /> Salvando...</> : step === 3 ? 'Salvar cliente' : 'Continuar'}</button></div></footer>
       </form>
     </section>
     {(error || storageError) && <RegistrationFeedbackPanel kind="error" message={error || storageError} onClose={() => { setError(''); setStorageError(''); }} />}

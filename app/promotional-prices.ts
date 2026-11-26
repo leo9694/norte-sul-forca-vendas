@@ -18,9 +18,20 @@ export function applyPromotions<T extends Item>(items: T[], data: Promotions, co
   const partnerGroup = data.partners.find(p => Number(p.CODPARC) === context.partner)?.GRUPODESCPARC;
   const mode = value(data.negotiations.find(n => Number(n.CODTIPVENDA) === context.negotiation)?.DESCPROM) || 'N';
   const biggest = data.parameters.some(p => p.CHAVE === 'USAMAIDESCPROMO' && p.LOGICO === 'S');
+  const productGroups = new Map<number, unknown>();
+  for (const product of data.products) {
+    const code = Number(product.CODPROD);
+    if (!productGroups.has(code)) productGroups.set(code, product.GRUPODESCPROD);
+  }
+  const productQuantities = new Map<number, number>(), groupQuantities = new Map<string, number>();
+  for (const item of items) {
+    productQuantities.set(item.CODPROD, (productQuantities.get(item.CODPROD) ?? 0) + item.quantity);
+    const group = groupKey(productGroups.get(item.CODPROD));
+    groupQuantities.set(group, (groupQuantities.get(group) ?? 0) + item.quantity);
+  }
   let changed = false;
   const next = items.map(item => {
-    const group = data.products.find(p => Number(p.CODPROD) === item.CODPROD)?.GRUPODESCPROD;
+    const group = productGroups.get(item.CODPROD);
     const rules = mode === 'N' ? [] : data.rules.filter(r => dateKey(r.DTINICIAL) <= today && dateKey(r.DTFINAL) >= today
       && (!Number(r.CODPARC) || Number(r.CODPARC) === context.partner)
       && (anyGroup(r.GRUPODESCPARC) || sameGroup(r.GRUPODESCPARC, partnerGroup))
@@ -39,7 +50,7 @@ export function applyPromotions<T extends Item>(items: T[], data: Promotions, co
       if (!['S', 'D'].includes(mode)) error = 'Esta modalidade de negociação promocional precisa ser revisada no Sankhya antes do envio.';
       if (rule.USADESCESP === 'S') error = 'Esta promoção especial precisa ser lançada no Sankhya.';
       if (['S', 'P', 'G'].includes(value(rule.USADESCQTD)) && ['D', 'Q'].includes(mode)) {
-        const quantity = rule.USADESCQTD === 'G' ? items.filter(i => sameGroup(data.products.find(p => Number(p.CODPROD) === i.CODPROD)?.GRUPODESCPROD, group)).reduce((sum, i) => sum + i.quantity, 0) : items.filter(i => i.CODPROD === item.CODPROD).reduce((sum, i) => sum + i.quantity, 0);
+        const quantity = rule.USADESCQTD === 'G' ? groupQuantities.get(groupKey(group)) ?? 0 : productQuantities.get(item.CODPROD) ?? 0;
         const bands = data.bands.filter(b => Number(b.NUPROMOCAO) === Number(rule.NUPROMOCAO)).sort((a, b) => Number(a.QTDE) - Number(b.QTDE));
         if (!bands.length) error = 'Promoção por quantidade sem faixas válidas. Revise o cadastro no Sankhya.';
         const excess = data.parameters.find(p => p.CHAVE === 'REGRAEXCDESCQTD');

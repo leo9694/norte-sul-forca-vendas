@@ -4,6 +4,9 @@ const SESSION_DURATION_HOURS = 12;
 const SESSION_DURATION_SECONDS = SESSION_DURATION_HOURS * 60 * 60;
 const SESSION_DURATION_MS = SESSION_DURATION_SECONDS * 1000;
 const TECHNICAL_SESSION_REUSE_MS = 15 * 60 * 1000;
+const TECHNICAL_LOGIN_TIMEOUT_MS = 12_000;
+const APPLICATION_LOGIN_TIMEOUT_MS = 20_000;
+const TEMPORARY_LOGOUT_TIMEOUT_MS = 3_000;
 
 export type SankhyaSession = {
   jsessionid: string;
@@ -140,7 +143,7 @@ async function parseSankhyaJson<T>(response: Response) {
   }
 }
 
-export async function loginSankhya(username: string, password: string) {
+export async function loginSankhya(username: string, password: string, signal = AbortSignal.timeout(TECHNICAL_LOGIN_TIMEOUT_MS)) {
   const body = {
     serviceName: "MobileLoginSP.login",
     requestBody: {
@@ -153,6 +156,7 @@ export async function loginSankhya(username: string, password: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
   const result = await parseSankhyaJson<{
     status: string;
@@ -183,6 +187,7 @@ async function callSankhyaOnce(
   module: "mge" | "mgecom",
   serviceName: string,
   requestBody: unknown,
+  signal?: AbortSignal,
 ) {
   const response = await fetch(omUrl(module, serviceName, jsessionid), {
     method: "POST",
@@ -191,6 +196,7 @@ async function callSankhyaOnce(
       Cookie: `JSESSIONID=${jsessionid}`,
     },
     body: JSON.stringify({ serviceName, requestBody }),
+    signal,
   });
   const result = await parseSankhyaJson<{
     status: string;
@@ -215,23 +221,35 @@ function isSankhyaAuthenticationError(error: unknown) {
   return /sankhya_auth_required|nao autorizado|sessao.*(?:expir|inval|nao foi reconhecida)|session.*expired|not authorized|authentication required|efetue.*login/.test(message);
 }
 
-async function getTechnicalSession(forceRefresh = false) {
+// Uma tentativa de login pode desistir da espera sem cancelar a autenticação
+// técnica compartilhada com outros usuários e requisições do app.
+function waitForTechnicalLogin<T>(promise: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
+async function getTechnicalSession(forceRefresh = false, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const reusable = cachedTechnicalSession
     && Date.now() - cachedTechnicalSessionAt < TECHNICAL_SESSION_REUSE_MS;
   if (!forceRefresh && reusable) return cachedTechnicalSession as AuthenticatedSankhyaSession;
-  if (technicalLoginPromise) return technicalLoginPromise;
-
-  technicalLoginPromise = loginSankhya(
-    env("SANKHYA_ACCESS_USER"),
-    env("SANKHYA_ACCESS_PASSWORD"),
-  ).then((session) => {
-    cachedTechnicalSession = session;
-    cachedTechnicalSessionAt = Date.now();
-    return session;
-  }).finally(() => {
-    technicalLoginPromise = null;
-  });
-  return technicalLoginPromise;
+  if (!technicalLoginPromise) {
+    technicalLoginPromise = loginSankhya(
+      env("SANKHYA_ACCESS_USER"),
+      env("SANKHYA_ACCESS_PASSWORD"),
+    ).then((session) => {
+      cachedTechnicalSession = session;
+      cachedTechnicalSessionAt = Date.now();
+      return session;
+    }).finally(() => {
+      technicalLoginPromise = null;
+    });
+  }
+  return signal ? waitForTechnicalLogin(technicalLoginPromise, signal) : technicalLoginPromise;
 }
 
 export async function callSankhya(
@@ -239,14 +257,15 @@ export async function callSankhya(
   module: "mge" | "mgecom",
   serviceName: string,
   requestBody: unknown,
+  signal?: AbortSignal,
 ) {
   try {
-    return await callSankhyaOnce(session.jsessionid, module, serviceName, requestBody);
+    return await callSankhyaOnce(session.jsessionid, module, serviceName, requestBody, signal);
   } catch (error) {
     if (!isSankhyaAuthenticationError(error)) throw error;
-    const renewedSession = await getTechnicalSession(true);
+    const renewedSession = await getTechnicalSession(true, signal);
     session.jsessionid = renewedSession.jsessionid;
-    return callSankhyaOnce(session.jsessionid, module, serviceName, requestBody);
+    return callSankhyaOnce(session.jsessionid, module, serviceName, requestBody, signal);
   }
 }
 
@@ -285,8 +304,8 @@ export async function downloadSankhyaFile(
   }
 }
 
-export async function executeQuery(session: SankhyaSession, sql: string) {
-  const result = await callSankhya(session, "mge", "DbExplorerSP.executeQuery", { sql });
+export async function executeQuery(session: SankhyaSession, sql: string, signal = AbortSignal.timeout(60_000)) {
+  const result = await callSankhya(session, "mge", "DbExplorerSP.executeQuery", { sql }, signal);
   const responseBody = result.responseBody as {
     fieldsMetadata?: Array<{ name: string }>;
     rows?: unknown[][];
@@ -318,10 +337,10 @@ export async function canAnalyzeOtherSellers(session: SankhyaSession) {
   return rows.some((row) => privilegedSellerAnalysisGroup(row.NOMEGRUPO) || supervisorSellerType(row.TIPVEND));
 }
 
-export async function createApplicationSession(username: string, password: string) {
-  const authenticatedUser = await loginSankhya(username, password);
+export async function createApplicationSession(username: string, password: string, signal = AbortSignal.timeout(APPLICATION_LOGIN_TIMEOUT_MS)) {
+  const authenticatedUser = await loginSankhya(username, password, signal);
   try {
-    const technicalSession = await getTechnicalSession();
+    const technicalSession = await getTechnicalSession(false, signal);
     const rows = await executeQuery(technicalSession as SankhyaSession, `
       SELECT U.CODUSU, U.NOMEUSU, U.NOMEUSUCPLT, U.CODVEND,
              U.CODGRUPO, G.NOMEGRUPO, V.APELIDO, V.ATIVO, V.TIPVEND
@@ -329,7 +348,8 @@ export async function createApplicationSession(username: string, password: strin
         LEFT JOIN TSIGRU G ON G.CODGRUPO = U.CODGRUPO
         LEFT JOIN TGFVEN V ON V.CODVEND = U.CODVEND
        WHERE U.CODUSU = ${authenticatedUser.userId}
-    `);
+    `, signal);
+    signal.throwIfAborted();
     const userData = rows[0] as Record<string, unknown> | undefined;
     const sellerId = Number(userData?.CODVEND || 0);
     if (!userData || !Number.isInteger(sellerId) || sellerId <= 0) {
@@ -349,12 +369,16 @@ export async function createApplicationSession(username: string, password: strin
       expiresAt: Date.now() + SESSION_DURATION_MS,
     } satisfies SankhyaSession;
   } finally {
-    await callSankhyaOnce(
-      authenticatedUser.jsessionid,
-      "mge",
-      "MobileLoginSP.logout",
-      {},
-    ).catch(() => null);
+    // Limpeza best-effort: a sessão temporária não é usada pelo aplicativo.
+    if (authenticatedUser.jsessionid !== cachedTechnicalSession?.jsessionid) {
+      void callSankhyaOnce(
+        authenticatedUser.jsessionid,
+        "mge",
+        "MobileLoginSP.logout",
+        {},
+        AbortSignal.timeout(TEMPORARY_LOGOUT_TIMEOUT_MS),
+      ).catch(() => null);
+    }
   }
 }
 

@@ -27,6 +27,9 @@ export async function POST(request: Request) {
       { headers: { "Set-Cookie": sessionCookieHeader(encoded) } },
     );
   } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      return Response.json({ error: "O Sankhya demorou para concluir o login. Tente novamente." }, { status: 504 });
+    }
     return Response.json(
       { error: error instanceof Error ? error.message : "Falha ao entrar." },
       { status: 401 },

@@ -4,6 +4,10 @@ type Source = {
   sellerId?: number; sellerName?: string;
 };
 
+export function duplicatePricingKey(partner: number, company: number, table: number, cart: { CODPROD: unknown }[]) {
+  return JSON.stringify([Number(partner), company, table, [...new Set(cart.map(item => Number(item.CODPROD)))].sort((a,b)=>a-b)]);
+}
+
 export function duplicateOrder<T extends Source>(source: T, partner: T['partner'], sellerId: number, sellerName: string): T {
   if (!source.cart.length) throw new Error('Este pedido não possui itens para duplicar.');
   if (!Number.isSafeInteger(Number(partner.CODPARC)) || Number(partner.CODPARC) <= 0) throw new Error('Selecione o cliente do pedido duplicado.');

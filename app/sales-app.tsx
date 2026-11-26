@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   CircleDollarSign,
   Copy,
   ClipboardList,
@@ -41,6 +42,7 @@ import {
   ShoppingCart,
   SlidersHorizontal,
   Sprout,
+  Target,
   Trash2,
   UserRound,
   UsersRound,
@@ -57,6 +59,9 @@ import { ClientRegistrationForm } from "./client-registration-form";
 import { RegistrationFeedbackPanel } from "./registration-feedback-panel";
 import { ClientDetailsPanel } from "./client-details-panel";
 import { DuplicateOrderPanel } from "./duplicate-order-panel";
+import { duplicatePricingKey } from "./order-duplication";
+import { GoalsScreen } from './goals-screen';
+import { activeSellers } from './goals-model';
 import { draftBackupContent, draftBackupIdentity, groupDraftBackups } from './draft-backup-model';
 import { canDownloadOrderBoleto, canDownloadOrderNfe, isOrderBilled, orderConferenceLabel } from './order-status';
 import {
@@ -104,6 +109,7 @@ type ProductLot = ApiRow & {
 type CartItem = Product & { quantity: number; adjustmentPercent?: number; promotionId?: number; promotionalPrice?: number; promotionError?: string };
 type PriceTable = { CODEMP?: number; CODTAB: number; NOMETAB: string };
 type OrderPriceResult = { company: number; priceCode: number; priceName: string; rows: ApiRow[] };
+type PreparedDuplicate = { draftId: string; sellerId: number; online: boolean; priceKey: string; promotions: Promotions };
 type Negotiation = { CODTIPVENDA: number; DESCRTIPVENDA: string };
 type OrderOperation = { CODTIPOPER: number; DESCROPER: string };
 type OrderCompany = { CODEMP: number; NOMEFANTASIA: string; GRUPOICMS?: number | null; CODTAB?: number | null };
@@ -117,7 +123,7 @@ type ProductGroup = {
 };
 type ProductBrand = { MARCA: string };
 type OrderPhase = "header" | "products" | "review";
-type AppScreen = "home" | "general-sales" | "orders" | "new" | "clients" | "communication" | "more";
+type AppScreen = "home" | "general-sales" | "orders" | "new" | "clients" | "goals" | "communication" | "more";
 type AppHistoryView = AppScreen | "client-picker" | "logout";
 type AppHistoryState = {
   norteSulVendas: true;
@@ -206,7 +212,7 @@ type DashboardData = {
 };
 type DashboardDetailType = "day" | "products" | "groupProducts" | "clients" | "newClients" | "recurringClients" | "reactivatedClients" | "inactiveClients";
 type DashboardDetailSelection = { type: DashboardDetailType; date?: string; groupId?: number; groupName?: string };
-type DashboardSeller = { CODVEND: number; APELIDO: string };
+type DashboardSeller = { CODVEND: number; APELIDO: string; ATIVO?: string };
 type GeneralSalesCompany = { CODEMP: number; NOMEFANTASIA: string };
 type GeneralSalesData = {
   summary: {
@@ -1094,8 +1100,18 @@ class ApiError extends Error {
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const text = await response.text();
+  // Só leituras recebem prazo padrão. Um POST de pedido não pode ser tratado
+  // como uma leitura cancelável, pois o ERP pode já ter gravado o documento.
+  const read = !init?.method || init.method.toUpperCase() === 'GET';
+  const signal = init?.signal ?? (read ? AbortSignal.timeout(url === '/api/sankhya/sync' ? 600_000 : 45_000) : undefined);
+  let response: Response, text: string;
+  try {
+    response = await fetch(url, signal ? { ...init, signal } : init);
+    text = await response.text();
+  } catch (error) {
+    if (signal?.aborted && signal.reason?.name === 'TimeoutError') throw new Error('A consulta demorou demais. Tente novamente; seus dados locais foram mantidos.');
+    throw error;
+  }
   let data: ({ error?: string } & T);
   try {
     data = JSON.parse(text) as ({ error?: string } & T);
@@ -1185,14 +1201,30 @@ export function SalesApp() {
   const [orderSellerId, setOrderSellerId] = useState<number | null>(null);
   const [orderSellerName, setOrderSellerName] = useState("");
   const [activeDraft, setActiveDraft] = useState<OrderDraft | null>(null);
+  const [preparedDuplicate, setPreparedDuplicate] = useState<PreparedDuplicate | null>(null);
+  const [ordersSelection, setOrdersSelection] = useState<{ userId: number; sellerId: number; from: string; to: string } | null>(null);
   const [drafts, setDrafts] = useState<OrderDraft[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
   const [draftBackupIssue, setDraftBackupIssue] = useState("");
   const draftsRef = useRef<OrderDraft[]>([]);
   const draftOwnerRef = useRef(0);
-  const [toast, setToast] = useState("");
+  const [toast, setToastText] = useState("");
+  const [toastVersion, setToastVersion] = useState(0);
+  const setToast = (message: string) => { setToastText(message); setToastVersion(current => current + 1); };
+  const sessionEpochRef = useRef(0);
+  const ordersRequestRef = useRef(0);
+  const loadInFlightRef = useRef(false);
+  const loadAbortRef = useRef<AbortController | null>(null);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [canMonitorSales, setCanMonitorSales] = useState(false);
+  const orderFilters = ordersSelection?.userId === userId && (canMonitorSales || ordersSelection.sellerId === sellerId)
+    ? ordersSelection : { sellerId, from: currentMonthStart(), to: inputDate(new Date()) };
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToastText(''), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [toast, toastVersion]);
 
   const applySnapshot = (snapshot: OfflineSnapshot, replaceOrders = true) => {
     setOfflineData(snapshot);
@@ -1201,7 +1233,9 @@ export function SalesApp() {
     setSellerId(snapshot.seller.sellerId);
     setSellerName(snapshot.seller.sellerName);
     setClients(snapshot.clients as Client[]);
-    if (replaceOrders) setOrders(filterOrdersByPeriod(snapshot.orders, currentMonthStart(), inputDate(new Date())));
+    if (replaceOrders && (!orderFilters.sellerId || orderFilters.sellerId === snapshot.seller.sellerId)) {
+      setOrders(filterOrdersByPeriod(snapshot.orders, orderFilters.from, orderFilters.to));
+    }
     setAuthenticated(true);
   };
 
@@ -1274,7 +1308,10 @@ export function SalesApp() {
   useEffect(() => {
     if (!authenticated || !online || !userId) return;
     let cancelled = false;
+    let refreshing = false;
     const refreshUnreadMessages = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
         const result = await api<{ rows: ChatConversation[] }>("/api/chat/conversations");
         if (cancelled) return;
@@ -1282,6 +1319,8 @@ export function SalesApp() {
         setUnreadMessages(total);
       } catch {
         // O contador é auxiliar e não deve interromper o restante do aplicativo.
+      } finally {
+        refreshing = false;
       }
     };
     void refreshUnreadMessages();
@@ -1293,6 +1332,8 @@ export function SalesApp() {
   }, [authenticated, online, userId]);
 
   const loadOrders = async (dateFrom = currentMonthStart(), dateTo = inputDate(new Date()), requestedSellerId = sellerId) => {
+    const requestId = ++ordersRequestRef.current, epoch = sessionEpochRef.current;
+    const current = () => requestId === ordersRequestRef.current && epoch === sessionEpochRef.current;
     setLoadingOrders(true);
     try {
       const params = new URLSearchParams({ kind: "orders" });
@@ -1300,6 +1341,7 @@ export function SalesApp() {
       if (dateTo) params.set("dateTo", dateTo);
       if (requestedSellerId) params.set("seller", String(requestedSellerId));
       const result = await api<{ rows: ApiRow[]; user?: string; userId?: number; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
+      if (!current()) return;
       setOrders(result.rows);
       if (result.user) setUser(result.user);
       if (result.userId) setUserId(Number(result.userId));
@@ -1307,29 +1349,41 @@ export function SalesApp() {
       if (result.sellerName) setSellerName(String(result.sellerName));
       setAuthenticated(true);
     } catch (error) {
+      if (!current()) return;
       const cached = requestedSellerId === sellerId
-        ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot())
+        ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId).catch(() => null) : await getLatestOfflineSnapshot().catch(() => null))
         : null;
+      if (!current()) return;
       if (cached) {
         applySnapshot(cached, false);
         setOrders(filterOrdersByPeriod(cached.orders, dateFrom, dateTo));
         setToast("Exibindo os pedidos da última carga salva neste aparelho.");
       } else {
-        setAuthenticated(false);
+        if (error instanceof ApiError && error.status === 401) setAuthenticated(false);
         setToast(error instanceof Error ? error.message : "Não foi possível carregar os pedidos.");
       }
     } finally {
-      setLoadingOrders(false);
-      setCheckingSession(false);
+      if (current()) {
+        setLoadingOrders(false);
+        setCheckingSession(false);
+      }
     }
   };
 
+  const reloadOrderSelection = () => loadOrders(orderFilters.from, orderFilters.to, orderFilters.sellerId);
+  const changeOrderSelection = (from: string, to: string, nextSellerId: number) => {
+    if (nextSellerId !== orderFilters.sellerId) setOrders([]);
+    setOrdersSelection({ userId, sellerId: nextSellerId, from, to });
+    void loadOrders(from, to, nextSellerId);
+  };
   const showOrders = () => {
     navigateTo("orders");
-    void loadOrders();
+    void reloadOrderSelection();
   };
 
   const returnToLogin = () => {
+    sessionEpochRef.current++;
+    loadAbortRef.current?.abort(); loadInFlightRef.current = false;
     localStorage.setItem(OFFLINE_SESSION_KEY, "false");
     setAuthenticated(false);
     setOfflineData(null);
@@ -1339,6 +1393,8 @@ export function SalesApp() {
     setSellerName("");
     setUnreadMessages(0);
     setCanMonitorSales(false);
+    setOrdersSelection(null);
+    setPreparedDuplicate(null);
     setScreen("home");
     setClientPickerOpen(false);
     setLogoutConfirmOpen(false);
@@ -1346,25 +1402,34 @@ export function SalesApp() {
   };
 
   const makeLoad = async (showSuccess = true) => {
+    if (loadInFlightRef.current) return null;
     if (!navigator.onLine) {
       setLoadError("Conecte-se à internet para concluir a primeira carga.");
       setToast("Conecte-se à internet para fazer uma nova carga.");
       return null;
     }
+    loadInFlightRef.current = true;
+    const epoch = sessionEpochRef.current;
+    const ordersRequestAtStart = ordersRequestRef.current;
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
     setSyncing(true);
     setLoadError("");
     setLoadStage("Consultando clientes, tabelas, preços e estoque no Sankhya...");
     try {
-      const snapshot = await api<OfflineSnapshot>("/api/sankhya/sync");
+      const snapshot = await api<OfflineSnapshot>("/api/sankhya/sync", { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600_000)]) });
+      if (epoch !== sessionEpochRef.current) return null;
       setLoadStage("Salvando os dados neste aparelho para uso offline...");
       await saveOfflineSnapshot(snapshot);
+      if (epoch !== sessionEpochRef.current) return null;
       localStorage.setItem(OFFLINE_SESSION_KEY, "true");
-      applySnapshot(snapshot);
+      applySnapshot(snapshot, ordersRequestAtStart === ordersRequestRef.current);
       if (showSuccess) {
         setToast(`Carga concluída: ${snapshot.clients.length} clientes e ${snapshot.products.length} saldos de produtos.`);
       }
       return snapshot;
     } catch (error) {
+      if (epoch !== sessionEpochRef.current) return null;
       if (error instanceof ApiError && error.status === 401) {
         returnToLogin();
         return null;
@@ -1374,13 +1439,18 @@ export function SalesApp() {
       setToast(message);
       return null;
     } finally {
-      setSyncing(false);
+      if (loadAbortRef.current === controller) {
+        loadAbortRef.current = null;
+        loadInFlightRef.current = false;
+        setSyncing(false);
+      }
     }
   };
 
   const loadCachedData = async (requestedSellerId: number) => {
+    const epoch = sessionEpochRef.current;
     const cached = await getOfflineSnapshot(requestedSellerId).catch(() => null);
-    if (!cached) return;
+    if (!cached || epoch !== sessionEpochRef.current) return;
     // Restaura somente os dados: a identidade é a da sessão recém-validada.
     setOfflineData(cached);
     setClients(cached.clients as Client[]);
@@ -1396,6 +1466,7 @@ export function SalesApp() {
   };
 
   const loadPortfolio = async (requestedSellerId = sellerId) => {
+    const epoch = sessionEpochRef.current;
     const isOwnPortfolio = requestedSellerId === sellerId;
     if (isOwnPortfolio && clients.length) return clients;
     setLoadingClients(true);
@@ -1403,12 +1474,15 @@ export function SalesApp() {
       const params = new URLSearchParams({ kind: "portfolio" });
       if (requestedSellerId) params.set("seller", String(requestedSellerId));
       const result = await api<{ rows: Client[] }>(`/api/sankhya/data?${params}`);
+      if (epoch !== sessionEpochRef.current) return [];
       if (isOwnPortfolio) setClients(result.rows);
       return result.rows;
     } catch (error) {
+      if (epoch !== sessionEpochRef.current) return [];
       const cached = isOwnPortfolio
-        ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId) : await getLatestOfflineSnapshot())
+        ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId).catch(() => null) : await getLatestOfflineSnapshot().catch(() => null))
         : null;
+      if (epoch !== sessionEpochRef.current) return [];
       if (cached) {
         setOfflineData(cached);
         setClients(cached.clients as Client[]);
@@ -1417,7 +1491,7 @@ export function SalesApp() {
       setToast(error instanceof Error ? error.message : "Não foi possível carregar a carteira.");
       return [];
     } finally {
-      setLoadingClients(false);
+      if (epoch === sessionEpochRef.current) setLoadingClients(false);
     }
   };
 
@@ -1611,6 +1685,7 @@ export function SalesApp() {
       setScreen(view);
       if (view !== "new") {
         setActiveDraft(null);
+        setPreparedDuplicate(null);
         setStartingPartner(null);
       }
     };
@@ -1687,10 +1762,12 @@ export function SalesApp() {
   };
 
   const logout = async () => {
+    sessionEpochRef.current++;
+    loadAbortRef.current?.abort(); loadInFlightRef.current = false;
     setLoggingOut(true);
     try {
       await unregisterPushNotifications().catch(() => null);
-      if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+      if (navigator.onLine) await fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).catch(() => null);
       localStorage.setItem(OFFLINE_SESSION_KEY, "false");
       setAuthenticated(false);
       setOfflineData(null);
@@ -1719,6 +1796,8 @@ export function SalesApp() {
     return (
       <LoginScreen
         onLogin={(loginData) => {
+          sessionEpochRef.current++;
+          loadAbortRef.current?.abort(); loadInFlightRef.current = false;
           setOfflineData(null);
           setDraftBackupIssue("");
           setLoadError("");
@@ -1774,6 +1853,7 @@ export function SalesApp() {
         onGeneralSales={() => navigateTo("general-sales")}
         onOrders={showOrders}
         onClients={showClients}
+        onGoals={() => navigateTo('goals')}
         onCommunication={openCommunication}
         unreadMessages={unreadMessages}
         onMore={() => navigateTo("more")}
@@ -1797,6 +1877,9 @@ export function SalesApp() {
             canAnalyzeSellers={canMonitorSales}
             currentSellerId={sellerId}
             currentSellerName={sellerName || user}
+            selectedSellerId={orderFilters.sellerId}
+            appliedFrom={orderFilters.from}
+            appliedTo={orderFilters.to}
             onNew={openNewOrder}
             onDuplicate={async (draft) => {
               const targetSeller = Number(draft.sellerId || sellerId);
@@ -1822,6 +1905,8 @@ export function SalesApp() {
                 table: priceData.priceCode, negotiation: draft.negotiation, operation: Number(draft.operation || 5),
               }) };
               await saveDraft(draft);
+              setPreparedDuplicate({ draftId: draft.id, sellerId: targetSeller, online,
+                priceKey: duplicatePricingKey(draft.partner.CODPARC, priceData.company, priceData.priceCode, draft.cart), promotions: promotionData });
               setActiveDraft(draft);
               setStartingPartner(draft.partner);
               setOrderSellerId(draft.sellerId ?? sellerId);
@@ -1837,9 +1922,10 @@ export function SalesApp() {
             onDraftSent={(id, draftId) => {
               removeDraft(draftId);
               setToast(`Pedido ${id || ""} enviado ao Sankhya com sucesso.`);
-              loadOrders();
+              void reloadOrderSelection();
             }}
             onResume={(draft) => {
+              setPreparedDuplicate(null);
               setActiveDraft(draft);
               setStartingPartner(draft.partner);
               setOrderSellerId(draft.sellerId ?? sellerId);
@@ -1847,7 +1933,7 @@ export function SalesApp() {
               pushHistoryView("new");
               setScreen("new");
             }}
-            onPeriodChange={loadOrders}
+            onPeriodChange={changeOrderSelection}
           />
         ) : screen === "clients" ? (
           <ClientsScreen
@@ -1860,6 +1946,8 @@ export function SalesApp() {
             currentSellerId={sellerId}
             currentSellerName={sellerName || user}
           />
+        ) : screen === "goals" ? (
+          <GoalsScreen key={userId} online={online} onNotice={message=>setToast(message)} />
         ) : screen === "communication" ? (
           <CommunicationScreen currentUserId={userId} currentUserName={user} online={online} />
         ) : screen === "more" ? (
@@ -1891,6 +1979,7 @@ export function SalesApp() {
             key={activeDraft?.id ?? `new-${startingPartner?.CODPARC}`}
             partner={startingPartner!}
             draft={activeDraft}
+            preparedDuplicate={preparedDuplicate?.draftId === activeDraft?.id ? preparedDuplicate : null}
             actingSellerId={orderSellerId ?? sellerId}
             actingSellerName={orderSellerName || sellerName || user}
             ownSellerId={sellerId}
@@ -1905,6 +1994,7 @@ export function SalesApp() {
               replaceHistoryView("orders");
               setScreen("orders");
               setActiveDraft(null);
+              setPreparedDuplicate(null);
               setStartingPartner(null);
               setOrderSellerId(null);
             }}
@@ -1914,9 +2004,10 @@ export function SalesApp() {
               replaceHistoryView("orders");
               setScreen("orders");
               setActiveDraft(null);
+              setPreparedDuplicate(null);
               setStartingPartner(null);
               setOrderSellerId(null);
-              loadOrders();
+              void reloadOrderSelection();
             }}
           />
         )}
@@ -1929,6 +2020,7 @@ export function SalesApp() {
           onGeneralSales={() => navigateTo("general-sales")}
           onOrders={showOrders}
           onClients={showClients}
+          onGoals={() => navigateTo('goals')}
           onCommunication={openCommunication}
           unreadMessages={unreadMessages}
           onMore={() => navigateTo("more")}
@@ -1999,9 +2091,11 @@ function LoginScreen({ onLogin }: { onLogin: (data: { user: string; userId: numb
     event.preventDefault();
     setLoading(true);
     setError("");
+    const signal = AbortSignal.timeout(25_000);
     try {
       const result = await api<{ user: string; userId: number; sellerId: number; sellerName: string }>("/api/auth/login", {
         method: "POST",
+        signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
@@ -2012,7 +2106,7 @@ function LoginScreen({ onLogin }: { onLogin: (data: { user: string; userId: numb
         sellerName: result.sellerName || result.user || username,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao entrar.");
+      setError(signal.aborted ? "O login demorou demais. Tente novamente." : err instanceof Error ? err.message : "Falha ao entrar.");
     } finally {
       setLoading(false);
     }
@@ -2085,6 +2179,7 @@ function DesktopSidebar({
   onGeneralSales,
   onOrders,
   onClients,
+  onGoals,
   onCommunication,
   unreadMessages,
   onMore,
@@ -2097,6 +2192,7 @@ function DesktopSidebar({
   onGeneralSales: () => void;
   onOrders: () => void;
   onClients: () => void;
+  onGoals: () => void;
   onCommunication: () => void;
   unreadMessages: number;
   onMore: () => void;
@@ -2116,6 +2212,7 @@ function DesktopSidebar({
           <ShoppingBag size={20} /> Pedidos
         </button>
         <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound size={20} /> Clientes</button>
+        <button className={active === 'goals' ? 'active' : ''} onClick={onGoals}><Target size={20} /> Metas</button>
         <button className={active === "communication" ? "active" : ""} onClick={onCommunication}>
           <MessageCircle size={20} /> Comunicação
           {unreadMessages > 0 && <span className="nav-unread-badge">{unreadMessages}</span>}
@@ -2291,25 +2388,25 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
     <div className="page dashboard-page general-sales-page">
       <header className="mobile-header dashboard-mobile-header">
         <BrandMark compact />
-        <div className="page-title"><h1>Vendas gerais</h1><p>Monitoramento das empresas</p></div>
-        <span className={`connection-dot ${online ? "" : "offline"}`} />
+        <div className="page-title"><h1>Visão geral</h1></div>
+        <span className={`connection-dot ${online ? "online" : "offline"}`} aria-label={online ? "Online" : "Offline"} />
       </header>
       <header className="desktop-header">
-        <div><span className="eyebrow">Gestão comercial</span><h1>Vendas gerais</h1><p>Desempenho consolidado e separado por empresa.</p></div>
+        <h1>Visão geral</h1>
         <span className="sync-badge"><CloudCheck size={15} /> {online ? "Dados do Sankhya" : "Dados salvos"}</span>
       </header>
 
       <section className="general-sales-filter" aria-label="Filtros do monitoramento geral">
-        <div className="dashboard-period-title"><CalendarDays size={19} /><span><strong>Período analisado</strong><small>{formatPeriod(applied.from)} a {formatPeriod(applied.to)}</small></span></div>
+        <div className="dashboard-period-title"><CalendarDays size={19} /><strong>{formatPeriod(applied.from)} a {formatPeriod(applied.to)}</strong></div>
         <div className="dashboard-period-presets">
-          <button onClick={() => selectPeriod(monthStart, todayValue)}>Este mês</button>
+          <button className={applied.from === monthStart && applied.to === todayValue ? "active" : ""} onClick={() => selectPeriod(monthStart, todayValue)}>Este mês</button>
           <button className={applied.from === yearStart && applied.to === todayValue ? "active" : ""} onClick={() => selectPeriod(yearStart, todayValue)}>Este ano</button>
-          <button onClick={() => selectPeriod(twelveMonthsStart, todayValue)}>Últimos 12 meses</button>
+          <button className={applied.from === twelveMonthsStart && applied.to === todayValue ? "active" : ""} aria-label="Últimos 12 meses" onClick={() => selectPeriod(twelveMonthsStart, todayValue)}>12 meses</button>
         </div>
-        <label>Empresa<select value={company} onChange={(event) => setCompany(Number(event.target.value))}><option value={0}>Todas as empresas</option>{companies.map((item) => <option key={item.CODEMP} value={item.CODEMP}>{item.CODEMP} — {item.NOMEFANTASIA}</option>)}</select></label>
+        <label className="overview-scope">Empresa<select value={company} onChange={(event) => setCompany(Number(event.target.value))}><option value={0}>Todas as empresas</option>{companies.map((item) => <option key={item.CODEMP} value={item.CODEMP}>{item.CODEMP} — {item.NOMEFANTASIA}</option>)}</select></label>
         <label>De<input type="date" value={dateFrom} max={dateTo} onChange={(event) => setDateFrom(event.target.value)} /></label>
         <label>Até<input type="date" value={dateTo} min={dateFrom} max={todayValue} onChange={(event) => setDateTo(event.target.value)} /></label>
-        <button className="primary dashboard-period-apply" onClick={() => setApplied({ from: dateFrom, to: dateTo, company })}><Filter size={15} /> Aplicar</button>
+        <button className="primary dashboard-period-apply" disabled={!dateFrom || !dateTo || dateFrom > dateTo || (dateFrom === applied.from && dateTo === applied.to && company === applied.company)} onClick={() => setApplied({ from: dateFrom, to: dateTo, company })}><Filter size={15} /> Aplicar</button>
       </section>
 
       {notice && <div className="dashboard-notice"><CloudOff size={16} /> {notice}</div>}
@@ -2317,8 +2414,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
         <div className="dashboard-loading"><LoaderCircle className="spin" /><span>Consolidando as vendas...</span></div>
       ) : data ? (
         <>
-          <p className="general-updated"><span /> Dados atualizados conforme o período selecionado</p>
-          <section className="general-kpis">
+          <section className="general-kpis" aria-label="Resumo do período">
             <article className="dashboard-kpi general-kpi sales"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(data.summary.SALES_VALUE))}</strong><em>{totalOrders.toLocaleString("pt-BR")} pedidos no total</em></div></article>
             <article className="dashboard-kpi general-kpi ticket"><span><ClipboardList /></span><div><small>Ticket médio</small><strong>{money(Number(data.summary.AVG_TICKET))}</strong><em>por pedido faturado</em></div></article>
             <article className="dashboard-kpi general-kpi clients"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{Number(data.summary.CLIENT_COUNT).toLocaleString("pt-BR")}</strong><em>{Number(data.summary.SELLER_COUNT).toLocaleString("pt-BR")} vendedores</em></div></article>
@@ -2327,12 +2423,12 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
 
           <section className="general-monitor-grid">
             <article className="dashboard-card general-monthly-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Evolução</span><h2>Vendas por mês</h2></div><span className="general-legend"><i /> Valor vendido</span></div>
+              <div className="dashboard-card-heading"><div><h2>Vendas por mês</h2></div><span className="general-legend"><i /> Valor vendido</span></div>
               <MonthlySalesChart rows={data.monthly} />
             </article>
 
             <article className="dashboard-card general-pipeline-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Pipeline</span><h2>Status dos pedidos</h2></div></div>
+              <div className="dashboard-card-heading"><div><h2>Status dos pedidos</h2></div></div>
               <div className="general-pipeline-content">
                 <div className="general-donut" style={{ background: `conic-gradient(#078454 0 ${totalOrders ? (confirmedOrders / totalOrders) * 360 : 0}deg, #efa85d 0 360deg)` }}>
                   <span><strong>{totalOrders.toLocaleString("pt-BR")}</strong><small>pedidos</small></span>
@@ -2346,7 +2442,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
             </article>
 
             <article className="dashboard-card general-seller-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Desempenho</span><h2>Ranking de vendedores</h2></div><span className="general-card-tag">Top 10</span></div>
+              <div className="dashboard-card-heading"><div><h2>Ranking de vendedores</h2></div><span className="general-card-tag">Top 10</span></div>
               <div className="general-seller-ranking general-ranking-scroll">
                 {data.sellers.slice(0, 10).map((item, index) => <div className="general-seller-row" key={item.CODVEND}><b className={index < 3 ? `podium podium-${index + 1}` : ""}>{index + 1}</b><div><strong>{item.APELIDO}</strong><small>{Number(item.ORDER_COUNT)} pedidos · ticket {money(Number(item.AVG_TICKET))}</small></div><em>{compactMoney(Number(item.SALES_VALUE))}</em></div>)}
                 {!data.sellers.length && <div className="dashboard-empty">Nenhum vendedor com vendas.</div>}
@@ -2354,7 +2450,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
             </article>
 
             <article className="dashboard-card general-group-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Mix de produtos</span><h2>Grupos mais vendidos</h2></div><span className="general-card-tag">Por valor</span></div>
+              <div className="dashboard-card-heading"><div><h2>Grupos mais vendidos</h2></div></div>
               <div className="general-group-ranking general-ranking-scroll">
                 {data.groups.slice(0, 10).map((item) => <div className="general-group-row" key={item.CODGRUPOPROD}><div><strong>{item.DESCRGRUPOPROD}</strong><em>{compactMoney(Number(item.SALES_VALUE))}</em></div><small>{groupTotal ? ((Number(item.SALES_VALUE) / groupTotal) * 100).toFixed(1).replace(".", ",") : "0,0"}% de participação</small><span><i style={{ width: `${(Number(item.SALES_VALUE) / maxGroup) * 100}%` }} /></span></div>)}
                 {!data.groups.length && <div className="dashboard-empty">Nenhum grupo vendido no período.</div>}
@@ -2362,7 +2458,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
             </article>
 
             <article className="dashboard-card general-company-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Comparativo</span><h2>Desempenho por empresa</h2></div><Building2 /></div>
+              <div className="dashboard-card-heading"><div><h2>Desempenho por empresa</h2></div><Building2 /></div>
               <div className="general-company-table-wrap">
                 <div className="general-company-table general-company-head"><span>Empresa</span><span>Pedidos</span><span>Clientes</span><span>Ticket médio</span><span>Vendas</span><span>Participação</span></div>
                 {data.companies.map((item) => {
@@ -2418,7 +2514,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
     void api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers", { cache: "no-store" })
       .then((result) => {
         if (cancelled) return;
-        setDashboardSellers(result.rows.map((item) => ({ CODVEND: Number(item.CODVEND), APELIDO: String(item.APELIDO || `Vendedor ${item.CODVEND}`) })));
+        setDashboardSellers(activeSellers(result.rows).map((item) => ({ CODVEND: Number(item.CODVEND), APELIDO: String(item.APELIDO || `Vendedor ${item.CODVEND}`), ATIVO:'S' })));
       })
       .catch(() => {
         if (!cancelled) setDashboardSellers([]);
@@ -2683,7 +2779,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
     <div className="page dashboard-page">
       <header className="mobile-header dashboard-mobile-header">
         <BrandMark compact />
-        <div className="page-title"><h1>Início</h1><p>Seu desempenho em vendas</p></div>
+        <div className="page-title"><h1>Visão geral</h1></div>
         <div className="dashboard-mobile-actions">
           <button className="icon-button dashboard-report-mobile" onClick={() => void generateCompleteReport()} disabled={!dashboard || loading || generatingReport} aria-label="Gerar relatório completo em PDF" title="Gerar relatório em PDF">
             {generatingReport ? <LoaderCircle className="spin" size={19} /> : <FileText size={19} />}
@@ -2692,36 +2788,28 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
         </div>
       </header>
       <header className="desktop-header">
-        <div><span className="eyebrow">Desempenho comercial</span><h1>Olá, {sellerName.split(" ")[0]}</h1><p>Acompanhe seus resultados de {periodLabel}.</p></div>
+        <h1>Visão geral</h1>
         <div className="dashboard-header-actions">
           <button className="primary dashboard-report-button" onClick={() => void generateCompleteReport()} disabled={!dashboard || loading || generatingReport}>
             {generatingReport ? <LoaderCircle className="spin" size={17} /> : <FileText size={17} />}
-            {generatingReport ? "Gerando relatório..." : "Gerar relatório completo"}
+            {generatingReport ? "Gerando relatório..." : "Relatório em PDF"}
           </button>
           <span className={`connection-badge ${online ? "online" : "offline"}`}>{online ? <CloudCheck size={16} /> : <CloudOff size={16} />}{online ? "Dados do Sankhya" : "Dados salvos"}</span>
         </div>
       </header>
 
-      {dashboardSellers.length > 0 && (
-        <section className="dashboard-seller-switch" aria-label="Selecionar vendedor para análise">
-          <UsersRound size={19} />
-          <label>
-            <span>Analisando vendedor</span>
-            <select value={selectedSellerId} onChange={(event) => setSelectedSellerId(Number(event.target.value))}>
-              {dashboardSellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
-            </select>
-          </label>
-          <small>Os indicadores e relatórios abaixo respeitam o vendedor selecionado.</small>
-        </section>
-      )}
-
       <section className="dashboard-period-filter" aria-label="Período do desempenho">
-        <div className="dashboard-period-title"><CalendarDays size={20} /><span><strong>Período analisado</strong><small>{periodLabel}</small></span></div>
+        <div className="dashboard-period-title"><CalendarDays size={20} /><strong>{periodLabel}</strong></div>
         <div className="dashboard-period-presets">
           <button className={appliedPeriod.from === currentMonthStart() && appliedPeriod.to === inputDate(new Date()) ? "active" : ""} onClick={selectCurrentMonth}>Este mês</button>
-          <button onClick={() => selectPeriod(daysAgo(29), inputDate(new Date()))}>Últimos 30 dias</button>
-          <button onClick={selectLastThreeMonths}>Últimos 3 meses</button>
+          <button aria-label="Últimos 30 dias" onClick={() => selectPeriod(daysAgo(29), inputDate(new Date()))}>30 dias</button>
+          <button aria-label="Últimos 3 meses" onClick={selectLastThreeMonths}>3 meses</button>
         </div>
+        {dashboardSellers.length > 0 && <label className="overview-scope">Vendedor
+          <select value={selectedSellerId} onChange={(event) => setSelectedSellerId(Number(event.target.value))}>
+            {dashboardSellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
+          </select>
+        </label>}
         <label>De<input type="date" value={dateFrom} max={dateTo || inputDate(new Date())} onChange={(event) => setDateFrom(event.target.value)} /></label>
         <label>Até<input type="date" value={dateTo} min={dateFrom} max={inputDate(new Date())} onChange={(event) => setDateTo(event.target.value)} /></label>
         <button className="primary dashboard-period-apply" disabled={!dateFrom || !dateTo || dateFrom > dateTo || (dateFrom === appliedPeriod.from && dateTo === appliedPeriod.to)} onClick={() => setAppliedPeriod({ from: dateFrom, to: dateTo })}>
@@ -2736,20 +2824,20 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
       ) : dashboard ? (
         <>
           <section className="dashboard-kpis" aria-label="Resumo do período">
-            <article className="dashboard-kpi featured"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(dashboard.summary.SALES_VALUE))}</strong><em>{periodLabel}</em></div></article>
+            <article className="dashboard-kpi featured"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(dashboard.summary.SALES_VALUE))}</strong></div></article>
             <article className="dashboard-kpi"><span><ShoppingBag /></span><div><small>Pedidos faturados</small><strong>{dashboard.summary.ORDER_COUNT}</strong></div></article>
             <article className="dashboard-kpi"><span><ClipboardList /></span><div><small>Ticket médio</small><strong>{money(Number(dashboard.summary.AVG_TICKET))}</strong><em>por pedido</em></div></article>
-            <article className="dashboard-kpi"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{dashboard.summary.CLIENT_COUNT}</strong><em>clientes únicos</em></div></article>
+            <article className="dashboard-kpi"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{dashboard.summary.CLIENT_COUNT}</strong></div></article>
           </section>
 
           <section className="dashboard-grid">
             <article className="dashboard-card sales-chart-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Evolução</span><div className="dashboard-panel-title-row"><h2>Valor de vendas por dia</h2>{panelPdfButton("evolution", "Evolução das vendas")}</div></div><strong>{money(Number(dashboard.summary.SALES_VALUE))}</strong></div>
+              <div className="dashboard-card-heading"><h2>Vendas por dia</h2>{panelPdfButton("evolution", "Evolução das vendas")}</div>
               {dashboard.dailySales.length ? (
                 <div className="sales-bars" aria-label="Gráfico diário de vendas">
                   {dashboard.dailySales.map((item) => (
                     <button className="sales-bar-item" key={item.SALE_DATE} title={`${item.SALE_DATE}: ${money(Number(item.SALES_VALUE))}. Abrir pedidos do dia.`} onClick={() => openDashboardDetail({ type: "day", date: item.SALE_DATE })}>
-                      <span>{money(Number(item.SALES_VALUE)).replace("R$ ", "")}</span>
+                      <span>{compactMoney(Number(item.SALES_VALUE)).replace(/^R\$\s*/, "")}</span>
                       <div><i style={{ height: `${Math.max(8, (Number(item.SALES_VALUE) / maxDaily) * 100)}%` }} /></div>
                       <small>{item.SALE_DATE.slice(0, 5)}</small>
                     </button>
@@ -2759,7 +2847,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
             </article>
 
             <article className="dashboard-card product-ranking-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Mix de vendas</span><div className="dashboard-panel-title-row"><h2>Produtos mais vendidos</h2>{panelPdfButton("products", "Mix de vendas")}</div></div><span className="dashboard-card-actions"><button onClick={() => openDashboardDetail({ type: "products" })}>Saiba mais <ArrowRight size={14} /></button><PackageCheck /></span></div>
+              <div className="dashboard-card-heading"><h2>Produtos mais vendidos</h2><span className="dashboard-card-actions">{panelPdfButton("products", "Mix de vendas")}<button onClick={() => openDashboardDetail({ type: "products" })}>Ver detalhes <ArrowRight size={14} /></button></span></div>
               {dashboard.topProducts.length ? (
                 <div className="ranking-list">
                   {dashboard.topProducts.map((item, index) => (
@@ -2772,7 +2860,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
             </article>
 
             <article className="dashboard-card group-sales-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Composição do faturamento</span><div className="dashboard-panel-title-row"><h2>Vendas por grupo de produto</h2>{panelPdfButton("groups", "Grupos de produtos")}</div></div><Box /></div>
+              <div className="dashboard-card-heading"><h2>Vendas por grupo</h2>{panelPdfButton("groups", "Grupos de produtos")}</div>
               {dashboard.salesByGroup.length ? (
                 <div className="group-sales-bars">
                   {dashboard.salesByGroup.map((item) => {
@@ -2791,7 +2879,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
             </article>
 
             <article className="dashboard-card clients-ranking-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Relacionamento</span><div className="dashboard-panel-title-row"><h2>Principais clientes do período</h2>{panelPdfButton("clients", "Relacionamento com clientes")}</div></div><span className="dashboard-card-actions"><button onClick={() => openDashboardDetail({ type: "clients" })}>Saiba mais <ArrowRight size={14} /></button><Building2 /></span></div>
+              <div className="dashboard-card-heading"><h2>Principais clientes</h2><span className="dashboard-card-actions">{panelPdfButton("clients", "Relacionamento com clientes")}<button onClick={() => openDashboardDetail({ type: "clients" })}>Ver detalhes <ArrowRight size={14} /></button></span></div>
               {dashboard.topClients.length ? (
                 <div className="client-ranking-list">
                   {dashboard.topClients.map((item, index) => (
@@ -2804,7 +2892,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
 
           <section className="dashboard-secondary-grid">
             <article className="dashboard-card client-portfolio-card">
-              <div className="dashboard-card-heading"><div><span className="eyebrow">Relacionamento comercial</span><div className="dashboard-panel-title-row"><h2>Carteira de clientes</h2>{panelPdfButton("portfolio", "Carteira de clientes")}</div></div><UsersRound /></div>
+              <div className="dashboard-card-heading"><h2>Carteira de clientes</h2>{panelPdfButton("portfolio", "Carteira de clientes")}</div>
               <div className="portfolio-indicators">
                 <button onClick={() => openDashboardDetail({ type: "newClients" })}><span><UserRound /></span><div><small>Clientes novos</small><strong>{Number(dashboard.clientPortfolio.NEW_CLIENTS)}</strong></div><ArrowRight className="portfolio-card-arrow" /></button>
                 <button onClick={() => openDashboardDetail({ type: "recurringClients" })}><span><UsersRound /></span><div><small>Clientes recorrentes</small><strong>{Number(dashboard.clientPortfolio.RECURRING_CLIENTS)}</strong></div><ArrowRight className="portfolio-card-arrow" /></button>
@@ -2812,8 +2900,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
                 <button className="attention" onClick={() => openDashboardDetail({ type: "inactiveClients" })}><span><CalendarDays /></span><div><small>Precisam de atenção</small><strong>{Number(dashboard.clientPortfolio.INACTIVE_30)}</strong><em>30+ dias sem comprar</em></div><ArrowRight className="portfolio-card-arrow" /></button>
               </div>
               <div className="portfolio-attention-strip">
-                <div><strong>{Number(dashboard.clientPortfolio.INACTIVE_30)} clientes precisam de atenção</strong><span><small>30+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_30)}</b></small><small>60+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_60)}</b></small><small>90+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_90)}</b></small></span></div>
-                <button className="primary" onClick={() => openDashboardDetail({ type: "inactiveClients" })}>Ver clientes <ArrowRight size={16} /></button>
+                <div><strong>Tempo sem comprar</strong><span><small>60+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_60)}</b></small><small>90+ dias <b>{Number(dashboard.clientPortfolio.INACTIVE_90)}</b></small></span></div>
               </div>
             </article>
           </section>
@@ -2872,7 +2959,7 @@ function DashboardDetailPanel({
     <div className="dashboard-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <aside className="dashboard-detail-panel" role="dialog" aria-modal="true" aria-labelledby="dashboard-detail-title">
         <header>
-          <div><span className="eyebrow">Detalhes do desempenho</span><h2 id="dashboard-detail-title">{title}</h2><p>{selection.type === "day" ? "Pedidos faturados no dia selecionado." : selection.type === "inactiveClients" ? "Clientes da sua carteira sem comprar há 30 dias ou mais." : clientSegment ? `Clientes classificados no período de ${periodLabel}.` : `Informações completas de ${periodLabel}.`}</p></div>
+          <div><h2 id="dashboard-detail-title">{title}</h2><p>{selection.type === "day" ? "Pedidos faturados no dia selecionado." : selection.type === "inactiveClients" ? "Clientes da sua carteira sem comprar há 30 dias ou mais." : clientSegment ? `Clientes classificados no período de ${periodLabel}.` : periodLabel}</p></div>
           <button className="modal-close" onClick={onClose} aria-label="Fechar painel"><X size={20} /></button>
         </header>
 
@@ -2944,6 +3031,9 @@ function OrdersScreen({
   canAnalyzeSellers,
   currentSellerId,
   currentSellerName,
+  selectedSellerId,
+  appliedFrom,
+  appliedTo,
   onNew,
   onDuplicate,
   onDeleteDraft,
@@ -2960,19 +3050,21 @@ function OrdersScreen({
   canAnalyzeSellers: boolean;
   currentSellerId: number;
   currentSellerName: string;
+  selectedSellerId: number;
+  appliedFrom: string;
+  appliedTo: string;
   onNew: (sellerId?: number, sellerName?: string) => void;
   onDuplicate: (draft: OrderDraft) => Promise<void>;
   onDeleteDraft: (id: string) => void;
   onDraftSent: (id: string | undefined, draftId: string) => void;
   onResume: (draft: OrderDraft) => void;
-  onPeriodChange: (dateFrom?: string, dateTo?: string, sellerId?: number) => void;
+  onPeriodChange: (dateFrom: string, dateTo: string, sellerId: number) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Todos");
   const [showPeriod, setShowPeriod] = useState(false);
-  const [dateFrom, setDateFrom] = useState(() => currentMonthStart());
-  const [dateTo, setDateTo] = useState(() => inputDate(new Date()));
-  const [selectedSellerId, setSelectedSellerId] = useState(currentSellerId);
+  const [dateFrom, setDateFrom] = useState(appliedFrom);
+  const [dateTo, setDateTo] = useState(appliedTo);
   const [sellers, setSellers] = useState<DashboardSeller[]>([]);
   const [draftMenuId, setDraftMenuId] = useState<string | null>(null);
   const [draftPendingDeletion, setDraftPendingDeletion] = useState<OrderDraft | null>(null);
@@ -3000,7 +3092,6 @@ function OrdersScreen({
     } catch (e) { setDuplicateError(e instanceof Error ? e.message : 'Não foi possível consultar os itens do pedido.'); }
     finally { duplicateLoadingRef.current = false; setLoadingDuplicate(false); }
   };
-  useEffect(() => setSelectedSellerId(currentSellerId), [currentSellerId]);
   useEffect(() => {
     if (!draftMenuId) return;
     const closeMenu = (event: MouseEvent) => {
@@ -3012,7 +3103,7 @@ function OrdersScreen({
   useEffect(() => {
     if (!canAnalyzeSellers) return;
     api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers")
-      .then((result) => setSellers(result.rows))
+      .then((result) => setSellers(activeSellers(result.rows)))
       .catch(() => setSellers([]));
   }, [canAnalyzeSellers]);
   const applySuggestedPeriod = (from: string, to: string) => {
@@ -3177,38 +3268,34 @@ function OrdersScreen({
     <div className="page orders-page">
       <header className="mobile-header">
         <BrandMark compact />
-        <div className="page-title"><h1>Pedidos</h1><p>Acompanhe seus pedidos e rascunhos</p></div>
-        <button className="icon-button"><Bell size={23} /></button>
+        <div className="page-title"><h1>Pedidos</h1></div>
       </header>
       <header className="desktop-header">
-        <div><span className="eyebrow">Operação comercial</span><h1>Pedidos</h1><p>Acompanhe sua carteira e crie novas vendas.</p></div>
+        <h1>Pedidos</h1>
         <button className="primary" onClick={() => onNew(selectedSellerId, sellers.find((seller) => Number(seller.CODVEND) === selectedSellerId)?.APELIDO)}><Plus size={19} /> Novo pedido</button>
       </header>
 
+      <div className="orders-controls">
+      <div className="search-row">
+        <label className="search-box"><Search size={18} aria-hidden="true" /><input aria-label="Buscar pedido, cliente ou código" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pedidos" /></label>
+        <button className={`filter-button ${showPeriod ? "active" : ""}`} onClick={() => setShowPeriod((current) => !current)} aria-expanded={showPeriod} aria-controls="orders-period">
+          <CalendarDays size={17} /><span>Período</span>
+        </button>
+      </div>
       {canAnalyzeSellers && sellers.length > 0 && (
         <section className="orders-seller-switch">
-          <UsersRound size={20} />
-          <label><span>Consultar pedidos e criar vendas para</span><select value={selectedSellerId} onChange={(event) => {
+          <label><span>Vendedor</span><select value={selectedSellerId} onChange={(event) => {
             const nextSellerId = Number(event.target.value);
-            setSelectedSellerId(nextSellerId);
-            onPeriodChange(dateFrom, dateTo, nextSellerId);
+            onPeriodChange(appliedFrom, appliedTo, nextSellerId);
           }}>
             {sellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
           </select></label>
-          <small>Os pedidos e a carteira exibidos serão do vendedor selecionado.</small>
         </section>
       )}
-
-      <div className="search-row">
-        <label className="search-box"><Search size={21} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pedido, cliente ou código" /></label>
-        <button className={`filter-button ${dateFrom || dateTo ? "active" : ""}`} onClick={() => setShowPeriod((current) => !current)} aria-expanded={showPeriod}>
-          <Filter size={20} /><span>{dateFrom || dateTo ? "Período ativo" : "Período"}</span>
-        </button>
       </div>
 
       {showPeriod && (
-        <section className="period-filter">
-          <div><CalendarDays size={20} /><span><strong>Filtrar por período</strong><small>A consulta será refeita diretamente no Sankhya.</small></span></div>
+        <section className="period-filter" id="orders-period" aria-label="Filtrar por período">
           <div className="period-filter-presets" aria-label="Períodos sugeridos">
             <button className={dateFrom === currentMonthStart() && dateTo === inputDate(new Date()) ? "active" : ""} onClick={() => applySuggestedPeriod(currentMonthStart(), inputDate(new Date()))}>Este mês</button>
             <button onClick={() => applySuggestedPeriod(daysAgo(29), inputDate(new Date()))}>Últimos 30 dias</button>
@@ -3216,12 +3303,6 @@ function OrdersScreen({
           </div>
           <label>De<input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} /></label>
           <label>Até<input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
-          <button className="secondary" onClick={() => {
-            setDateFrom(currentMonthStart());
-            setDateTo(inputDate(new Date()));
-            onPeriodChange(currentMonthStart(), inputDate(new Date()), selectedSellerId);
-            setShowPeriod(false);
-          }}>Este mês</button>
           <button className="primary" disabled={!dateFrom || !dateTo || dateFrom > dateTo} onClick={() => {
             onPeriodChange(dateFrom, dateTo, selectedSellerId);
             setShowPeriod(false);
@@ -3229,28 +3310,30 @@ function OrdersScreen({
         </section>
       )}
 
-      <div className="filter-chips">
+      <section className="metrics" aria-label="Resumo dos pedidos">
+        <Metric icon={<CircleDollarSign />} label="Total dos pedidos" value={money(total)} />
+        <Metric icon={<CheckCircle2 />} label="Faturados" value={String(orders.filter(isOrderBilled).length)} />
+        <Metric blue icon={<FileText />} label="Rascunhos" value={String(drafts.length)} />
+      </section>
+
+      <div className="filter-chips" role="group" aria-label="Situação dos pedidos">
         {["Todos", "Faturados", "Rascunhos", "Aguardando"].map((item) => (
-          <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item}</button>
+          <button key={item} className={filter === item ? "active" : ""} aria-pressed={filter === item} onClick={() => setFilter(item)}>{item}</button>
         ))}
       </div>
 
-      <section className="metrics">
-        <Metric icon={<CircleDollarSign />} label="Total em carteira" value={money(total)} />
-        <Metric icon={<Send />} label="Faturados" value={String(orders.filter(isOrderBilled).length)} />
-        <Metric blue icon={<FileText />} label="Rascunhos" value={String(filteredDrafts.length)} />
-      </section>
-
-      <section className="orders-section">
-        <div className="section-heading"><div><span className="eyebrow">Movimentações</span><h2>Pedidos recentes</h2></div><button>Ver todos <ArrowRight size={17} /></button></div>
+      {draftReportError && <div className="global-error" role="alert">{draftReportError}</div>}
+      {orderDocumentError && <div className="global-error" role="alert">{orderDocumentError}</div>}
+      {loadingDuplicate && <p className="client-detail-status" role="status"><LoaderCircle size={17} className="spin" /> Carregando pedido para duplicar…</p>}
+      {duplicateError && <div className="global-error" role="alert">{duplicateError}</div>}
+      {filteredDrafts.length > 0 && <section className="orders-section" aria-label="Rascunhos">
+        <div className="orders-list-heading"><h2>Rascunhos</h2><span>{filteredDrafts.length}</span></div>
         <div className="order-list">
           {filteredDrafts.map((draft) => (
-            <article className="order-card draft-card" key={draft.id}>
-              <span className="order-icon"><FileText /></span>
-              <div className="order-client"><strong title={`${draft.partner.CODPARC} - ${draft.partner.NOMEPARC}`}>{draft.partner.CODPARC} - {draft.partner.NOMEPARC}</strong><small>Rascunho automático · Vendedor: {sellerNameForDraft(draft)}</small></div>
-              <div className="order-date"><small>{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</small></div>
-              <div className="order-total"><strong>{money(cartTotal(draft.cart))}</strong></div>
-              <button className="status draft" onClick={() => onResume({ ...draft, sellerName: sellerNameForDraft(draft) })}><FileText size={15} /> Continuar</button>
+            <article className="order-card orders-entry orders-entry-draft" key={draft.id}>
+              <div className="order-client orders-entry-client"><strong title={`${draft.partner.CODPARC} - ${draft.partner.NOMEPARC}`}>{draft.partner.CODPARC} - {draft.partner.NOMEPARC}</strong><div className="orders-entry-meta"><span>Vendedor: {sellerNameForDraft(draft)}</span><time title="Última alteração">{new Date(draft.updatedAt).toLocaleDateString("pt-BR")}</time></div></div>
+              <strong className="orders-entry-total">{money(cartTotal(draft.cart))}</strong>
+              <div className="orders-entry-action"><button className="secondary orders-resume" onClick={() => onResume({ ...draft, sellerName: sellerNameForDraft(draft) })}>Continuar <ChevronRight size={15} /></button></div>
               <div className={`draft-actions${draftMenuId === draft.id ? " menu-open" : ""}`} onClick={(event) => event.stopPropagation()}>
                 <button className="draft-menu-trigger" aria-label="Mais opções do rascunho" aria-expanded={draftMenuId === draft.id} onClick={() => setDraftMenuId((current) => current === draft.id ? null : draft.id)}><MoreVertical size={20} /></button>
                 {draftMenuId === draft.id && (
@@ -3278,22 +3361,32 @@ function OrdersScreen({
               </div>
             </article>
           ))}
-          {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando pedidos...</div> : filtered.map((order, index) => (
-            <article className="order-card order-card-rich" key={String(order.NUNOTA)}>
-              <span className="order-icon">{index % 2 ? <Leaf /> : <Building2 />}</span>
-              <div className="order-rich-content">
-                <div className="order-rich-head">
-                  <div className="order-client"><strong title={`${order.CODPARC} - ${order.NOMEPARC}`}>{String(order.CODPARC)} - {String(order.NOMEPARC)}</strong><div className="order-rich-badges"><span className="order-code">PED-{String(order.NUNOTA)}</span><span className="order-top-badge">{Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div></div>
-                  <div className="order-rich-actions">
+        </div>
+      </section>}
+      {filter !== "Rascunhos" && (loading || filtered.length > 0) && <section className="orders-section" aria-label="Pedidos enviados">
+        <div className="orders-list-heading"><h2>{filter === "Todos" ? "Enviados" : filter}</h2>{!loading && <span>{filtered.length}</span>}</div>
+        <div className="order-list">
+          {loading ? <div className="empty-state" role="status"><LoaderCircle className="spin" /> Carregando pedidos…</div> : filtered.map((order) => (
+            <article className="order-card orders-entry" key={String(order.NUNOTA)}>
+              <div className="order-client orders-entry-client">
+                <strong title={`${order.CODPARC} - ${order.NOMEPARC}`}>{String(order.CODPARC)} - {String(order.NOMEPARC)}</strong>
+                <div className="orders-entry-meta"><span className="order-code">PED-{String(order.NUNOTA)}</span><span>{Number(order.CODTIPOPER) === 6 ? "Bonificação" : "Pedido de venda"}</span></div>
+                <div className="orders-entry-meta orders-entry-dates"><span>Negociação: {sankhyaDate(order.DTNEG)}</span>{isOrderBilled(order) && <span>Faturamento: {sankhyaDate(order.DTFAT)}</span>}</div>
+              </div>
+              <strong className="orders-entry-total">{money(Number(order.VLRNOTA || 0))}</strong>
+              <div className="orders-entry-action">
+                <div className="order-status-group"><span className={`status ${isOrderBilled(order) ? "sent" : "waiting"}`}>
+                  {isOrderBilled(order) ? <><CheckCircle2 size={15} /> Faturado</> : orderConferenceLabel(order)}
+                </span>{isOrderBilled(order) && order.STATUS_CONFERENCIA && <small>Conferência: {orderConferenceLabel(order)}</small>}</div>
+                {(canDownloadOrderNfe(order) || canDownloadOrderBoleto(order)) && (
                     <div className="order-document-links">
-                      <button disabled={!online || !canDownloadOrderNfe(order) || openingOrderDocument !== null} title={canDownloadOrderNfe(order) ? "Abrir DANFE em outra aba" : "Disponível após confirmação da nota e autorização da NF-e"} onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} Abrir DANFE</button>
-                      <button disabled={!online || !canDownloadOrderBoleto(order) || openingOrderDocument !== null} title={canDownloadOrderBoleto(order) ? "Abrir boleto em outra aba" : "Disponível após confirmação da nota, com boleto pendente"} onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Abrir boleto</button>
+                      {canDownloadOrderNfe(order) && <button disabled={!online || openingOrderDocument !== null} aria-label="Abrir DANFE" onClick={() => void openOrderPdf(order, "danfe")}>{openingOrderDocument === `${order.NUNOTA}:danfe` ? <LoaderCircle className="spin" size={15} /> : <FileText size={15} />} DANFE</button>}
+                      {canDownloadOrderBoleto(order) && <button disabled={!online || openingOrderDocument !== null} aria-label="Abrir boleto" onClick={() => void openOrderPdf(order, "boleto")}>{openingOrderDocument === `${order.NUNOTA}:boleto` ? <LoaderCircle className="spin" size={15} /> : <Barcode size={15} />} Boleto</button>}
                     </div>
-                    <div className="order-status-group"><span className={`status ${isOrderBilled(order) ? "sent" : "waiting"}`}>
-                      {isOrderBilled(order) ? <><CheckCircle2 size={18} /> Faturado</> : orderConferenceLabel(order)}
-                    </span>{isOrderBilled(order) && order.STATUS_CONFERENCIA && <small>Conferência: {orderConferenceLabel(order)}</small>}</div>
+                )}
+              </div>
                     <div className={`draft-actions sent-order-actions${draftMenuId === `pedido-${order.NUNOTA}` ? " menu-open" : ""}`} onClick={(event) => event.stopPropagation()}>
-                      <button className="draft-menu-trigger" aria-label={`Relatórios do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}><MoreVertical size={20} /></button>
+                      <button className="draft-menu-trigger" aria-label={`Mais opções do pedido ${order.NUNOTA}`} aria-expanded={draftMenuId === `pedido-${order.NUNOTA}`} onClick={() => setDraftMenuId(current => current === `pedido-${order.NUNOTA}` ? null : `pedido-${order.NUNOTA}`)}><MoreVertical size={20} /></button>
                       {draftMenuId === `pedido-${order.NUNOTA}` && <div className="draft-menu" role="menu">
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order)}><FileText size={14} /> Relatório do pedido</button>
                         <button role="menuitem" className="draft-report" disabled={!online || reportingDraftKey !== null} onClick={() => void reportSentOrder(order, true)}><Barcode size={14} /> Pedido com Código de barras</button>
@@ -3301,24 +3394,11 @@ function OrdersScreen({
                         {!online && <small>Conecte-se para consultar os itens do pedido.</small>}
                       </div>}
                     </div>
-                  </div>
-                </div>
-                <div className="order-rich-meta">
-                  <span><CalendarDays size={22} /><span><small>Data da negociação</small>{sankhyaDate(order.DTNEG)}</span></span>
-                  <i />
-                  <span><FileText size={22} /><span><small>Data do faturamento</small>{isOrderBilled(order) ? sankhyaDate(order.DTFAT) : "—"}</span></span>
-                </div>
-                <div className="order-rich-total">{money(Number(order.VLRNOTA || 0))}</div>
-              </div>
             </article>
           ))}
-          {!loading && !filtered.length && !filteredDrafts.length && <div className="empty-state">Nenhum pedido encontrado.</div>}
         </div>
-      </section>
-      {draftReportError && <div className="global-error">{draftReportError}</div>}
-      {orderDocumentError && <div className="global-error">{orderDocumentError}</div>}
-      {loadingDuplicate && <p className="client-detail-status" role="status"><LoaderCircle size={17} className="spin" /> Carregando o pedido completo para duplicar...</p>}
-      {duplicateError && <div className="global-error" role="alert">{duplicateError}</div>}
+      </section>}
+      {(!loading || filter === "Rascunhos") && !filtered.length && !filteredDrafts.length && <div className="empty-state orders-empty">{filter === "Rascunhos" ? "Nenhum rascunho encontrado." : "Nenhum pedido encontrado."}</div>}
       {duplicateSource && <DuplicateOrderPanel source={duplicateSource} userId={currentUserId} sessionSellerId={currentSellerId} sellerId={Number(duplicateSource.sellerId || currentSellerId)} sellerName={sellerNameForDraft(duplicateSource)} online={online} offlineData={offlineData} onClose={() => setDuplicateSource(null)} onDuplicate={onDuplicate} />}
       {draftPendingDeletion && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Excluir rascunho">
@@ -3391,7 +3471,7 @@ function ClientsScreen({
   useEffect(() => {
     if (!canAnalyzeSellers || !online) return;
     api<{ rows: DashboardSeller[] }>("/api/sankhya/data?kind=dashboardSellers", { cache: "no-store" })
-      .then((result) => setSellers(result.rows.map((item) => ({ CODVEND: Number(item.CODVEND), APELIDO: String(item.APELIDO || `Vendedor ${item.CODVEND}`) }))))
+      .then((result) => setSellers(activeSellers(result.rows).map((item) => ({ CODVEND: Number(item.CODVEND), APELIDO: String(item.APELIDO || `Vendedor ${item.CODVEND}`), ATIVO:'S' }))))
       .catch(() => setSellers([]));
   }, [canAnalyzeSellers, online]);
   useEffect(() => {
@@ -3418,63 +3498,52 @@ function ClientsScreen({
 
   return (
     <div className="page clients-page">
-      <header className="mobile-header">
-        <BrandMark compact />
-        <div className="page-title"><h1>Clientes</h1><p>Sua carteira no Sankhya</p></div>
-        <button className="icon-button"><Bell size={23} /></button>
-      </header>
-      <header className="desktop-header">
-        <div><span className="eyebrow">Carteira comercial</span><h1>Clientes</h1><p>Todos os clientes ativos vinculados ao seu cadastro de vendedor.</p></div>
-      </header>
-      <div className="clients-create-row"><button className="primary" onClick={() => { setRegistrationNotice(''); setRegistrationOpen(true); }}><Plus size={18} /> Novo cliente</button></div>
+      <header className="clients-heading"><div><div className="clients-heading-brand"><BrandMark compact /></div><h1>Clientes</h1></div><button className="primary" onClick={() => { setRegistrationNotice(''); setRegistrationOpen(true); }}><Plus size={18} /> Novo cliente</button></header>
       {registrationNotice && <RegistrationFeedbackPanel kind="success" message={registrationNotice} onClose={() => setRegistrationNotice('')} />}
 
-      {canAnalyzeSellers && sellers.length > 0 && (
-        <section className="clients-seller-switch" aria-label="Selecionar vendedor para carteira">
-          <UsersRound size={20} />
-          <label><span>Consultar carteira do vendedor</span><select value={selectedSellerId} onChange={(event) => setSelectedSellerId(Number(event.target.value))}>
+      <div className="clients-controls">
+        <label className="search-box clients-search">
+          <Search size={18} aria-hidden="true" />
+          <input aria-label="Buscar cliente por nome, código ou CPF/CNPJ" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nome, código ou CPF/CNPJ" />
+        </label>
+        {canAnalyzeSellers && sellers.length > 0 && (
+          <label className="clients-scope"><span>Vendedor</span><select value={selectedSellerId} onChange={(event) => setSelectedSellerId(Number(event.target.value))}>
             {sellers.map((seller) => <option key={seller.CODVEND} value={seller.CODVEND}>{seller.APELIDO}</option>)}
           </select></label>
-          <small>Clientes e tabelas de preço respeitam o vendedor selecionado.</small>
-        </section>
-      )}
+        )}
+      </div>
 
-      <label className="search-box clients-search">
-        <Search size={21} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente por nome, código ou CPF/CNPJ" />
-      </label>
-
-      <section className="metrics client-metrics">
-        <Metric icon={<UsersRound />} label="Clientes na carteira" value={String(portfolio.length)} />
-        <Metric icon={<CircleDollarSign />} label="Com tabela de preço" value={String(configured)} />
-        <Metric blue icon={<ClipboardList />} label="Sem tabela definida" value={String(portfolio.length - configured)} />
+      <section className="metrics client-metrics" aria-label="Resumo da carteira">
+        <Metric icon={<UsersRound />} label="Na carteira" value={isLoading ? "—" : String(portfolio.length)} />
+        <Metric icon={<CircleDollarSign />} label="Com tabela" value={isLoading ? "—" : String(configured)} />
+        <Metric blue icon={<ClipboardList />} label="Sem tabela" value={isLoading ? "—" : String(portfolio.length - configured)} />
       </section>
 
       <section>
-        <div className="section-heading">
-          <div><span className="eyebrow">{selectedSellerId === currentSellerId ? "Vendedor logado" : "Vendedor selecionado"}</span><h2>{selectedSellerId === currentSellerId ? "Minha carteira" : `Carteira de ${selectedSellerName}`}</h2><p>{filtered.length} {filtered.length === 1 ? "cliente encontrado" : "clientes encontrados"}</p></div>
+        <div className="clients-list-heading">
+          <h2>Carteira</h2>{!isLoading && <span>{filtered.length} {filtered.length === 1 ? "cliente" : "clientes"}</span>}
         </div>
         <div className="client-grid">
-          {isLoading ? <div className="empty-state"><LoaderCircle className="spin" /> Carregando toda a carteira...</div> : filtered.map((client) => (
-            <article className="client-card client-card-open" key={client.CODPARC} role="button" tabIndex={0} aria-label={`Ver informações de ${client.NOMEPARC}`} onClick={() => setSelectedClient(client)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedClient(client); } }}>
+          {isLoading ? <div className="empty-state" role="status"><LoaderCircle className="spin" /> Carregando carteira…</div> : filtered.map((client) => (
+            <button type="button" className="client-card client-card-open" key={client.CODPARC} aria-label={`Ver informações de ${client.NOMEPARC}`} onClick={() => setSelectedClient(client)}>
               <span className="client-avatar"><Building2 size={20} /></span>
-              <div className="client-main">
+              <span className="client-main">
                 <strong>{client.NOMEPARC}</strong>
                 <small>Cód. {client.CODPARC}{client.CGCCPF ? ` · ${client.CGCCPF}` : ""}</small>
-                <div className="client-contact">
+                {(client.TELEFONE || client.EMAIL) && <span className="client-contact">
                   {client.TELEFONE && <span><Phone size={13} /> {client.TELEFONE}</span>}
                   {client.EMAIL && <span><Mail size={13} /> {client.EMAIL}</span>}
-                </div>
-              </div>
-              <div className="client-commercial">
+                </span>}
+              </span>
+              <span className="client-commercial">
                 <span className={client.CODTAB != null ? "configured" : "missing"}>
                   {client.CODTAB != null ? `Tabela ${client.CODTAB}` : "Sem tabela"}
                 </span>
-                {client.GRUPOICMS != null && <small>Grupo ICMS {client.GRUPOICMS}</small>}
-              </div>
-            </article>
+                <ChevronRight size={17} aria-hidden="true" />
+              </span>
+            </button>
           ))}
-          {!isLoading && !filtered.length && <div className="empty-state">Nenhum cliente encontrado na carteira.</div>}
+          {!isLoading && !filtered.length && <div className="empty-state">{query.trim() ? "Nenhum cliente encontrado." : "Nenhum cliente nesta carteira."}</div>}
         </div>
       </section>
       {selectedClient && <ClientDetailsPanel key={`${currentUserId}:${selectedSellerId}:${selectedClient.CODPARC}`} client={selectedClient} orders={selectedSellerId === currentSellerId ? orders : []} userId={currentUserId} sessionSellerId={currentSellerId} sellerId={selectedSellerId} online={online} onClose={() => setSelectedClient(null)} />}
@@ -3522,13 +3591,15 @@ function CommunicationScreen({
     }
   };
 
-  const loadMessages = async (conversation: ChatConversation, quiet = false) => {
+  const loadMessages = async (conversation: ChatConversation, quiet = false, signal?: AbortSignal) => {
     if (!online) return;
     if (!quiet) setLoading(true);
     try {
       const result = await api<{ rows: ChatMessage[] }>(
         `/api/chat/messages?conversation=${encodeURIComponent(conversation.id)}`,
+        signal ? { signal } : undefined,
       );
+      if (signal?.aborted) return;
       setMessages(result.rows);
       setConversations((current) =>
         current.map((item) => item.id === conversation.id ? { ...item, unread_count: 0 } : item),
@@ -3538,9 +3609,9 @@ function CommunicationScreen({
         if (container) container.scrollTop = container.scrollHeight;
       }, 0);
     } catch (err) {
-      if (!quiet) setError(err instanceof Error ? err.message : "Não foi possível carregar as mensagens.");
+      if (!quiet && !signal?.aborted) setError(err instanceof Error ? err.message : "Não foi possível carregar as mensagens.");
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && !signal?.aborted) setLoading(false);
     }
   };
 
@@ -3554,11 +3625,20 @@ function CommunicationScreen({
   useEffect(() => {
     if (!activeConversation || !online) {
       setMessages([]);
+      setLoading(false);
       return;
     }
-    void loadMessages(activeConversation);
-    const timer = window.setInterval(() => void loadMessages(activeConversation, true), 3000);
-    return () => window.clearInterval(timer);
+    const controller = new AbortController();
+    let busy = false;
+    const refresh = async (quiet = false) => {
+      if (busy) return;
+      busy = true;
+      try { await loadMessages(activeConversation, quiet, AbortSignal.any([controller.signal, AbortSignal.timeout(45_000)])); }
+      finally { busy = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(true), 3000);
+    return () => { controller.abort(); window.clearInterval(timer); };
   }, [activeConversation?.id, online]);
 
   useEffect(() => {
@@ -4025,6 +4105,7 @@ function ClientPickerModal({
 function NewOrderV2({
   partner,
   draft,
+  preparedDuplicate,
   actingSellerId,
   actingSellerName,
   ownSellerId,
@@ -4037,6 +4118,7 @@ function NewOrderV2({
 }: {
   partner: Partner;
   draft: OrderDraft | null;
+  preparedDuplicate: PreparedDuplicate | null;
   actingSellerId: number;
   actingSellerName: string;
   ownSellerId: number;
@@ -4064,12 +4146,15 @@ function NewOrderV2({
   const [negotiation, setNegotiation] = useState(Number(draft?.negotiation || 0));
   const [observation, setObservation] = useState(draft?.observation ?? "");
   const [cart, setCart] = useState<CartItem[]>(draft?.cart ?? []);
-  const [promotions, setPromotions] = useState<Promotions | null>(null);
+  const prepared = useRef(preparedDuplicate);
+  const [promotions, setPromotions] = useState<Promotions | null>(() => preparedDuplicate?.promotions ?? null);
   const [promotionsError, setPromotionsError] = useState('');
   const [pricesReady, setPricesReady] = useState(false);
   const [pricesError, setPricesError] = useState('');
   useEffect(() => {
     let active = true;
+    if (prepared.current?.sellerId === actingSellerId && prepared.current.online === online) return;
+    prepared.current = null;
     setPromotions(null);
     setPromotionsError('');
     if (!online) {
@@ -4359,8 +4444,15 @@ function NewOrderV2({
   };
 
   const cartProductCodes = [...new Set(cart.map(item => Number(item.CODPROD)))].sort((a,b) => a-b).join(',');
+  const currentPricingKey = duplicatePricingKey(partner.CODPARC, companyCode, priceCode, cart);
+  const preparedPriceKey = useRef(preparedDuplicate?.priceKey);
   useEffect(() => {
     let active = true;
+    if (prepared.current?.sellerId === actingSellerId && prepared.current.online === online && preparedPriceKey.current === currentPricingKey) {
+      setPricesReady(true);
+      return;
+    }
+    preparedPriceKey.current = undefined;
     setPricesReady(false); setPricesError('');
     if (!cartProductCodes) { setPricesReady(true); return; }
     if (!companyCode || !priceCode) return;
@@ -4386,7 +4478,7 @@ function NewOrderV2({
         .then(update).catch(err => { if (active) setPricesError(err.message); });
     }
     return () => { active = false; };
-  }, [cartProductCodes, offlineData, companyCode, priceCode, actingSellerId, partner.CODPARC, online]);
+  }, [cartProductCodes, currentPricingKey, offlineData, companyCode, priceCode, actingSellerId, partner.CODPARC, online]);
 
   const currentDraft = (): OrderDraft => ({
     id: draftId,
@@ -5302,6 +5394,7 @@ function MobileNav({
   onGeneralSales,
   onOrders,
   onClients,
+  onGoals,
   onCommunication,
   unreadMessages,
   onMore,
@@ -5312,6 +5405,7 @@ function MobileNav({
   onGeneralSales: () => void;
   onOrders: () => void;
   onClients: () => void;
+  onGoals: () => void;
   onCommunication: () => void;
   unreadMessages: number;
   onMore: () => void;
@@ -5326,6 +5420,7 @@ function MobileNav({
       )}
       <button className={active === "orders" ? "active" : ""} onClick={onOrders}><ShoppingBag /><span>Pedidos</span></button>
       <button className={active === "clients" ? "active" : ""} onClick={onClients}><UsersRound /><span>Clientes</span></button>
+      <button className={active === 'goals' ? 'active' : ''} onClick={onGoals}><Target /><span>Metas</span></button>
       <button className={active === "communication" ? "active" : ""} onClick={onCommunication}>
         <span className="mobile-nav-icon"><MessageCircle />{unreadMessages > 0 && <strong className="nav-unread-badge">{unreadMessages}</strong>}</span>
         <span>Comunicação</span>

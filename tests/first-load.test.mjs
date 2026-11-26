@@ -24,6 +24,7 @@ function loader({ online = true, save = async () => {}, fetch = async () => ({ s
     applySnapshot: record('apply'), setSyncing: record('syncing'), setLoadError: record('error'),
     setLoadStage: record('stage'), setToast: record('toast'), returnToLogin: record('login'),
     ApiError: class extends Error {},
+    loadInFlightRef: {current:false}, loadAbortRef: {current:null}, sessionEpochRef: {current:0}, ordersRequestRef: {current:0},
   });
   return { events, makeLoad };
 }
@@ -59,6 +60,7 @@ test('offline first load does not attempt a request or unlock the app', async ()
 test('reads only the current seller cache without replacing the authenticated identity', async () => {
   const events = [];
   const loadCachedData = localFunction('loadCachedData', {
+    sessionEpochRef: {current:0},
     getOfflineSnapshot: async id => { events.push(['seller', id]); return { clients: [], orders: [], seller: { userId: 99 } }; },
     setOfflineData: data => events.push(['cache', data]), setClients: () => {}, setOrders: () => {},
     filterOrdersByPeriod: orders => orders, currentMonthStart: () => '', inputDate: () => '',

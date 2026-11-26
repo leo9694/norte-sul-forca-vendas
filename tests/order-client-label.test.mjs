@@ -11,7 +11,7 @@ test('sent orders and drafts show the actual customer code before the name, with
   const labels = [];
   const walk = node => {
     if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attr => ts.isJsxAttribute(attr)
-      && attr.name.getText(ast) === 'className' && attr.initializer?.getText(ast) === '"order-client"')) {
+      && attr.name.getText(ast) === 'className' && attr.initializer?.getText(ast) === '"order-client orders-entry-client"')) {
       labels.push(node.children.find(child => ts.isJsxElement(child) && child.openingElement.tagName.getText(ast) === 'strong'));
     }
     ts.forEachChild(node, walk);

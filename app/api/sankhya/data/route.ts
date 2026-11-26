@@ -170,7 +170,7 @@ export async function GET(request: Request) {
         return Response.json({ error: "Você não possui permissão para analisar outros vendedores." }, { status: 403 });
       }
       const rows = await executeQuery(session, `
-        SELECT V.CODVEND, V.APELIDO
+        SELECT V.CODVEND, V.APELIDO, V.ATIVO
           FROM TGFVEN V
          WHERE V.ATIVO = 'S'
            AND V.CODVEND > 0
