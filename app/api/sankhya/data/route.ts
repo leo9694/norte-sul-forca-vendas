@@ -1,6 +1,6 @@
 import { canAnalyzeOtherSellers, executeQuery, requireSession } from "../../_lib/sankhya";
 import { priceInheritanceCtes } from "../../_lib/price-inheritance";
-import { linkedInvoiceQuery, orderBillingFields } from '../../_lib/order-status';
+import { invoiceTotalsSql, linkedInvoiceQuery, orderBillingFields } from '../../_lib/order-status';
 
 const numeric = (value: string | null, fallback = 0) => {
   const parsed = Number(value);
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
           SELECT DISTINCT E.CODEMP, E.NOMEFANTASIA
             FROM TSIEMP E
             JOIN TGFCAB C ON C.CODEMP = E.CODEMP
-           WHERE C.CODTIPOPER = 35
+           WHERE C.CODTIPOPER IN (35, 10)
              AND C.TIPMOV = 'V'
            ORDER BY E.CODEMP
         `);
@@ -55,41 +55,33 @@ export async function GET(request: Request) {
         ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1`
         : "TRUNC(SYSDATE) + 1";
       const companyFilter = companyId ? `AND C.CODEMP = ${companyId}` : "";
-      const period = `
+      const invoicePeriod = `
         C.DTENTSAI >= ${startExpression}
         AND C.DTENTSAI < ${endExpression}
-        AND C.CODTIPOPER = 35
         AND C.TIPMOV = 'V'
         ${companyFilter}
       `;
+      const period = `${invoicePeriod} AND C.CODTIPOPER = 35`;
 
       const [summaryRows, companies, sellers, groups, monthly] = await Promise.all([
         executeQuery(session, `
-          WITH DOCUMENTOS AS (
-            SELECT C.NUNOTA, C.STATUSNOTA, C.CODPARC, C.CODVEND,
-                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
-              FROM TGFCAB C
-              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
-             WHERE ${period}
-             GROUP BY C.NUNOTA, C.STATUSNOTA, C.CODPARC, C.CODVEND
-          )
-          SELECT NVL(SUM(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) SALES_VALUE,
-                 COUNT(CASE WHEN D.STATUSNOTA = 'L' THEN 1 END) ORDER_COUNT,
-                 NVL(AVG(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE END), 0) AVG_TICKET,
-                 COUNT(DISTINCT CASE WHEN D.STATUSNOTA = 'L' THEN D.CODPARC END) CLIENT_COUNT,
-                 COUNT(DISTINCT CASE WHEN D.STATUSNOTA = 'L' THEN D.CODVEND END) SELLER_COUNT,
-                 COUNT(CASE WHEN D.STATUSNOTA <> 'L' THEN 1 END) OPEN_ORDER_COUNT,
-                 NVL(SUM(CASE WHEN D.STATUSNOTA <> 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) OPEN_VALUE
-            FROM DOCUMENTOS D
+          SELECT NVL(SUM(CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA = 'L' THEN C.VLRNOTA END), 0) SALES_VALUE,
+                 NVL(SUM(CASE WHEN C.CODTIPOPER = 10 AND C.STATUSNOTA = 'L' THEN C.VLRNOTA END), 0) BONUS_VALUE,
+                 COUNT(CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA = 'L' THEN 1 END) ORDER_COUNT,
+                 NVL(AVG(CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA = 'L' THEN C.VLRNOTA END), 0) AVG_TICKET,
+                 COUNT(DISTINCT CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA = 'L' THEN C.CODPARC END) CLIENT_COUNT,
+                 COUNT(DISTINCT CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA = 'L' THEN C.CODVEND END) SELLER_COUNT,
+                 COUNT(CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA <> 'L' THEN 1 END) OPEN_ORDER_COUNT,
+                 NVL(SUM(CASE WHEN C.CODTIPOPER = 35 AND C.STATUSNOTA <> 'L' THEN C.VLRNOTA END), 0) OPEN_VALUE
+            FROM TGFCAB C
+           WHERE ${invoicePeriod} AND C.CODTIPOPER IN (35, 10)
         `),
         executeQuery(session, `
           WITH DOCUMENTOS AS (
             SELECT C.NUNOTA, C.CODEMP, C.STATUSNOTA, C.CODPARC, C.CODVEND,
-                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+                   C.VLRNOTA ITEM_VALUE
               FROM TGFCAB C
-              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
              WHERE ${period}
-             GROUP BY C.NUNOTA, C.CODEMP, C.STATUSNOTA, C.CODPARC, C.CODVEND
           )
           SELECT D.CODEMP, E.NOMEFANTASIA,
                  NVL(SUM(CASE WHEN D.STATUSNOTA = 'L' THEN D.ITEM_VALUE ELSE 0 END), 0) SALES_VALUE,
@@ -107,12 +99,10 @@ export async function GET(request: Request) {
         executeQuery(session, `
           WITH DOCUMENTOS AS (
             SELECT C.NUNOTA, C.CODVEND, C.CODPARC,
-                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+                   C.VLRNOTA ITEM_VALUE
               FROM TGFCAB C
-              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
              WHERE ${period}
                AND C.STATUSNOTA = 'L'
-             GROUP BY C.NUNOTA, C.CODVEND, C.CODPARC
           )
           SELECT D.CODVEND, V.APELIDO,
                  NVL(SUM(D.ITEM_VALUE), 0) SALES_VALUE,
@@ -140,12 +130,10 @@ export async function GET(request: Request) {
         executeQuery(session, `
           WITH DOCUMENTOS AS (
             SELECT C.NUNOTA, TRUNC(C.DTENTSAI, 'MM') SALE_MONTH,
-                   NVL(SUM(I.VLRTOT), 0) ITEM_VALUE
+                   C.VLRNOTA ITEM_VALUE
               FROM TGFCAB C
-              JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
              WHERE ${period}
                AND C.STATUSNOTA = 'L'
-             GROUP BY C.NUNOTA, TRUNC(C.DTENTSAI, 'MM')
           )
           SELECT TO_CHAR(D.SALE_MONTH, 'MM/YYYY') SALE_MONTH,
                  NVL(SUM(D.ITEM_VALUE), 0) SALES_VALUE,
@@ -238,7 +226,8 @@ export async function GET(request: Request) {
           )
         )
       `;
-      const rows = await executeQuery(session, `
+      const [rows, invoiceRows] = await Promise.all([
+        executeQuery(session, `
         SELECT * FROM (
           SELECT C.NUNOTA, C.NUMNOTA, C.DTNEG, C.DTENTSAI,
                  ${orderBillingFields()},
@@ -251,9 +240,12 @@ export async function GET(request: Request) {
              ${periodFilter}
            ORDER BY C.NUNOTA DESC
         ) WHERE ROWNUM <= 500
-      `);
+        `),
+        executeQuery(session, invoiceTotalsSql(startExpression, endExpression, `AND C.CODVEND = ${dashboardSellerId}`)),
+      ]);
       return Response.json({
         rows,
+        invoiceTotals: invoiceRows[0],
         user: session.user,
         userId: session.userId,
         sellerId: session.sellerId,
@@ -276,31 +268,23 @@ export async function GET(request: Request) {
         ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1`
         : "TRUNC(SYSDATE) + 1";
       const period = `
-        C.DTNEG >= ${startExpression}
-        AND C.DTNEG < ${endExpression}
-        AND C.CODTIPOPER = 5
-        AND C.TIPMOV = 'P'
+        C.DTENTSAI >= ${startExpression}
+        AND C.DTENTSAI < ${endExpression}
+        AND C.CODTIPOPER = 35
+        AND C.TIPMOV = 'V'
         AND C.CODVEND = ${dashboardSellerId}
+        AND C.STATUSNOTA = 'L'
       `;
       const [summaryRows, dailySales, topProducts, topClients, clientPortfolioRows, salesByGroup] = await Promise.all([
+        executeQuery(session, invoiceTotalsSql(startExpression, endExpression, `AND C.CODVEND = ${dashboardSellerId}`)),
         executeQuery(session, `
-          SELECT NVL(SUM(CASE WHEN C.STATUSNOTA = 'L' THEN C.VLRNOTA ELSE 0 END), 0) SALES_VALUE,
-                 COUNT(CASE WHEN C.STATUSNOTA = 'L' THEN 1 END) ORDER_COUNT,
-                 NVL(AVG(CASE WHEN C.STATUSNOTA = 'L' THEN C.VLRNOTA END), 0) AVG_TICKET,
-                 COUNT(DISTINCT CASE WHEN C.STATUSNOTA = 'L' THEN C.CODPARC END) CLIENT_COUNT,
-                 NVL(SUM(CASE WHEN C.STATUSNOTA <> 'L' THEN C.VLRNOTA ELSE 0 END), 0) PENDING_VALUE
-            FROM TGFCAB C
-           WHERE ${period}
-        `),
-        executeQuery(session, `
-          SELECT TO_CHAR(TRUNC(C.DTNEG), 'DD/MM/YYYY') SALE_DATE,
+          SELECT TO_CHAR(TRUNC(C.DTENTSAI), 'DD/MM/YYYY') SALE_DATE,
                  NVL(SUM(C.VLRNOTA), 0) SALES_VALUE,
                  COUNT(*) ORDER_COUNT
             FROM TGFCAB C
            WHERE ${period}
-             AND C.STATUSNOTA = 'L'
-           GROUP BY TRUNC(C.DTNEG)
-           ORDER BY TRUNC(C.DTNEG)
+           GROUP BY TRUNC(C.DTENTSAI)
+           ORDER BY TRUNC(C.DTENTSAI)
         `),
         executeQuery(session, `
           SELECT * FROM (
@@ -311,7 +295,6 @@ export async function GET(request: Request) {
               JOIN TGFITE I ON I.NUNOTA = C.NUNOTA
               JOIN TGFPRO P ON P.CODPROD = I.CODPROD
              WHERE ${period}
-               AND C.STATUSNOTA = 'L'
              GROUP BY I.CODPROD, P.DESCRPROD
              ORDER BY SUM(I.QTDNEG) DESC, SUM(I.VLRTOT) DESC
           ) WHERE ROWNUM <= 5
@@ -324,7 +307,6 @@ export async function GET(request: Request) {
               FROM TGFCAB C
               JOIN TGFPAR P ON P.CODPARC = C.CODPARC
              WHERE ${period}
-               AND C.STATUSNOTA = 'L'
              GROUP BY C.CODPARC, P.NOMEPARC
              ORDER BY SUM(C.VLRNOTA) DESC
           ) WHERE ROWNUM <= 5
@@ -338,10 +320,10 @@ export async function GET(request: Request) {
                AND P.CODVEND = ${dashboardSellerId}
           ),
           VENDAS AS (
-            SELECT C.CODPARC, C.DTNEG
+            SELECT C.CODPARC, C.DTENTSAI AS DTNEG
               FROM TGFCAB C
-             WHERE C.CODTIPOPER = 5
-               AND C.TIPMOV = 'P'
+             WHERE C.CODTIPOPER = 35
+               AND C.TIPMOV = 'V'
                AND C.STATUSNOTA = 'L'
                AND C.CODVEND = ${dashboardSellerId}
           ),
@@ -371,13 +353,12 @@ export async function GET(request: Request) {
             JOIN TGFPRO P ON P.CODPROD = I.CODPROD
             JOIN TGFGRU G ON G.CODGRUPOPROD = P.CODGRUPOPROD
            WHERE ${period}
-             AND C.STATUSNOTA = 'L'
            GROUP BY P.CODGRUPOPROD, G.DESCRGRUPOPROD
            ORDER BY SUM(I.VLRTOT) DESC
         `),
       ]);
       const payload = {
-        summary: summaryRows[0] ?? { SALES_VALUE: 0, ORDER_COUNT: 0, AVG_TICKET: 0, CLIENT_COUNT: 0, PENDING_VALUE: 0 },
+        summary: summaryRows[0] ?? { SALES_VALUE: 0, BONUS_VALUE: 0, ORDER_COUNT: 0, AVG_TICKET: 0, CLIENT_COUNT: 0 },
         dailySales,
         topProducts,
         topClients,
@@ -399,10 +380,10 @@ export async function GET(request: Request) {
         ? `TO_DATE('${dateTo}', 'DD/MM/YYYY') + 1`
         : "TRUNC(SYSDATE) + 1";
       const period = `
-        C.DTNEG >= ${startExpression}
-        AND C.DTNEG < ${endExpression}
-        AND C.CODTIPOPER = 5
-        AND C.TIPMOV = 'P'
+        C.DTENTSAI >= ${startExpression}
+        AND C.DTENTSAI < ${endExpression}
+        AND C.CODTIPOPER = 35
+        AND C.TIPMOV = 'V'
         AND C.CODVEND = ${dashboardSellerId}
         AND C.STATUSNOTA = 'L'
       `;
@@ -411,13 +392,13 @@ export async function GET(request: Request) {
         const selectedDate = safeDate(url.searchParams.get("date"));
         if (!selectedDate) return Response.json({ error: "Selecione um dia válido." }, { status: 400 });
         const rows = await executeQuery(session, `
-          SELECT C.NUNOTA, C.NUMNOTA, TO_CHAR(C.DTNEG, 'DD/MM/YYYY') DTNEG,
+          SELECT C.NUNOTA, C.NUMNOTA, TO_CHAR(C.DTENTSAI, 'DD/MM/YYYY') DTNEG,
                  C.VLRNOTA, C.CODPARC, P.NOMEPARC
             FROM TGFCAB C
             JOIN TGFPAR P ON P.CODPARC = C.CODPARC
            WHERE ${period}
-             AND C.DTNEG >= TO_DATE('${selectedDate}', 'DD/MM/YYYY')
-             AND C.DTNEG < TO_DATE('${selectedDate}', 'DD/MM/YYYY') + 1
+             AND C.DTENTSAI >= TO_DATE('${selectedDate}', 'DD/MM/YYYY')
+             AND C.DTENTSAI < TO_DATE('${selectedDate}', 'DD/MM/YYYY') + 1
            ORDER BY C.VLRNOTA DESC, C.NUNOTA DESC
         `);
         return Response.json({ rows });
@@ -463,10 +444,10 @@ export async function GET(request: Request) {
                AND P.CODVEND = ${dashboardSellerId}
           ),
           VENDAS AS (
-            SELECT C.CODPARC, C.NUNOTA, C.DTNEG, C.VLRNOTA
+            SELECT C.CODPARC, C.NUNOTA, C.DTENTSAI AS DTNEG, C.VLRNOTA
               FROM TGFCAB C
-             WHERE C.CODTIPOPER = 5
-               AND C.TIPMOV = 'P'
+             WHERE C.CODTIPOPER = 35
+               AND C.TIPMOV = 'V'
                AND C.STATUSNOTA = 'L'
                AND C.CODVEND = ${dashboardSellerId}
           ),
@@ -497,10 +478,10 @@ export async function GET(request: Request) {
       if (kind === "dashboardInactiveClients") {
         const rows = await executeQuery(session, `
           WITH ULTIMA_COMPRA AS (
-            SELECT C.CODPARC, MAX(C.DTNEG) LAST_PURCHASE
+            SELECT C.CODPARC, MAX(C.DTENTSAI) LAST_PURCHASE
               FROM TGFCAB C
-             WHERE C.CODTIPOPER = 5
-               AND C.TIPMOV = 'P'
+             WHERE C.CODTIPOPER = 35
+               AND C.TIPMOV = 'V'
                AND C.STATUSNOTA = 'L'
                AND C.CODVEND = ${dashboardSellerId}
              GROUP BY C.CODPARC
@@ -524,7 +505,7 @@ export async function GET(request: Request) {
                NVL(SUM(C.VLRNOTA), 0) SALES_VALUE,
                COUNT(*) ORDER_COUNT,
                NVL(AVG(C.VLRNOTA), 0) AVG_TICKET,
-               MAX(C.DTNEG) LAST_ORDER_DATE
+               MAX(C.DTENTSAI) LAST_ORDER_DATE
           FROM TGFCAB C
           JOIN TGFPAR P ON P.CODPARC = C.CODPARC
          WHERE ${period}

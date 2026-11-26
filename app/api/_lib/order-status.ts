@@ -3,6 +3,18 @@ export const invoiceCondition = (alias = 'F', confirmed = true) => `${alias}.COD
 export const linkedInvoiceQuery = (orderAlias = 'C', confirmed = true) => `FROM TGFVAR V JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA
   WHERE V.NUNOTAORIG = ${orderAlias}.NUNOTA AND ${invoiceCondition('F', confirmed)}`;
 
+export function invoiceTotalsSql(start: string, end: string, scope: string) {
+  return `SELECT NVL(SUM(CASE WHEN C.CODTIPOPER = 35 THEN C.VLRNOTA ELSE 0 END), 0) SALES_VALUE,
+                 NVL(SUM(CASE WHEN C.CODTIPOPER = 10 THEN C.VLRNOTA ELSE 0 END), 0) BONUS_VALUE,
+                 COUNT(CASE WHEN C.CODTIPOPER = 35 THEN 1 END) ORDER_COUNT,
+                 NVL(AVG(CASE WHEN C.CODTIPOPER = 35 THEN C.VLRNOTA END), 0) AVG_TICKET,
+                 COUNT(DISTINCT CASE WHEN C.CODTIPOPER = 35 THEN C.CODPARC END) CLIENT_COUNT
+            FROM TGFCAB C
+           WHERE ${invoiceCondition('C')}
+             AND C.DTENTSAI >= ${start} AND C.DTENTSAI < ${end}
+             ${scope}`;
+}
+
 export function orderBillingFields(orderAlias = 'C') {
   const confirmed = linkedInvoiceQuery(orderAlias);
   const conference = `FROM TGFVAR V JOIN TGFCAB F ON F.NUNOTA = V.NUNOTA

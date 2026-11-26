@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { isOrderBilled, canDownloadOrderNfe, canDownloadOrderBoleto, orderConferenceLabel } from '../app/order-status.ts';
-import { invoiceCondition, linkedInvoiceQuery, orderBillingFields } from '../app/api/_lib/order-status.ts';
+import { invoiceCondition, invoiceTotalsSql, linkedInvoiceQuery, orderBillingFields } from '../app/api/_lib/order-status.ts';
 import { normalizeOrderDocuments, publicDocumentError } from '../app/api/_lib/order-documents.js';
 
 test('source order release and legacy offline flags alone never imply confirmed billing', () => {
@@ -51,12 +51,27 @@ test('online date filters use confirmed invoice dates but retain negotiation dat
   const js = ts.transpileModule(dataSource.replace(/^import[^\n]+\n/gm, ''), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace(/export /g, '');
   const queries = [];
   const bindings = { requireSession: async () => ({ sellerId: 123 }), canAnalyzeOtherSellers: async () => false,
-    executeQuery: async (_session, sql) => { queries.push(sql); return []; }, priceInheritanceCtes: () => '', linkedInvoiceQuery, orderBillingFields };
+    executeQuery: async (_session, sql) => { queries.push(sql); return sql.includes('BONUS_VALUE') ? [{ SALES_VALUE: 350, BONUS_VALUE: 10 }] : []; }, priceInheritanceCtes: () => '', invoiceTotalsSql, linkedInvoiceQuery, orderBillingFields };
   const GET = new Function(...Object.keys(bindings), js + ';return GET;')(...Object.values(bindings));
-  assert.equal((await GET(new Request('http://local?kind=orders&dateFrom=2026-10-01&dateTo=2026-10-31'))).status, 200);
+  const response = await GET(new Request('http://local?kind=orders&dateFrom=2026-10-01&dateTo=2026-10-31'));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json().then(data => data.invoiceTotals), { SALES_VALUE: 350, BONUS_VALUE: 10 });
   assert.match(queries[0], /F.DTENTSAI >= TO_DATE\('01\/10\/2026'/);
   assert.match(queries[0], /NOT EXISTS[\s\S]*F.STATUSNOTA = 'L'[\s\S]*C.DTNEG >=/);
   assert.match(queries[0], /C.CODVEND = 123/);
+  assert.match(queries[1], /C.CODTIPOPER IN \(35, 10\) AND C.TIPMOV = 'V' AND C.STATUSNOTA = 'L'/);
+  assert.match(queries[1], /C.DTENTSAI >= TO_DATE\('01\/10\/2026'.*C.DTENTSAI < TO_DATE\('31\/10\/2026'.*\+ 1/);
+  assert.match(queries[1], /C.CODVEND = 123/);
+  assert.doesNotMatch(queries[1], /TGFVAR|ROWNUM/);
+  queries.length = 0;
+  const dashboard = await GET(new Request('http://local?kind=dashboard&dateFrom=2026-10-01&dateTo=2026-10-31'));
+  assert.equal(dashboard.status, 200);
+  assert.equal((await dashboard.json()).summary.BONUS_VALUE, 10);
+  for (const sql of queries.slice(1)) {
+    assert.match(sql, /C.CODTIPOPER = 35\s+AND C.TIPMOV = 'V'/);
+    assert.match(sql, /C.STATUSNOTA = 'L'/);
+    assert.doesNotMatch(sql, /C.CODTIPOPER = [56]\b/);
+  }
 });
 
 const documentSource = await readFile(new URL('../app/api/sankhya/order-documents/route.ts', import.meta.url), 'utf8');

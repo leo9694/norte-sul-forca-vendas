@@ -40,6 +40,12 @@ test('orders keep draft and sent actions separate and only expose available invo
   assert.match(renderOrders({online:false}),/disabled="" aria-label="Abrir DANFE"/);
 });
 
+test('sales and bonuses in the order summary use fiscal totals, not the listed orders',()=>{
+  const html=renderOrders({invoiceTotals:{SALES_VALUE:3010.5,BONUS_VALUE:92.1}});
+  assert.match(html,/Vendas faturadas[\s\S]*3\.010,50[\s\S]*Bonificação faturada[\s\S]*92,10/);
+  assert.match(renderOrders(),/Vendas faturadas<\/small><strong>—/);
+});
+
 test('draft filter hides sent loading state and date panel has one current-month action',()=>{
   const html=renderOrders({loading:true},'Rascunhos',true);
   assert.match(html,/aria-pressed="true">Rascunhos/);

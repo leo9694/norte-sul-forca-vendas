@@ -75,6 +75,7 @@ import {
 } from "./offline-store";
 
 type ApiRow = Record<string, string | number | null>;
+type InvoiceTotals = { SALES_VALUE: number; BONUS_VALUE: number; ORDER_COUNT: number };
 export type Partner = ApiRow & {
   CODPARC: number;
   NOMEPARC: string;
@@ -190,12 +191,9 @@ type SankhyaChatUser = {
 };
 
 type DashboardData = {
-  summary: {
-    SALES_VALUE: number;
-    ORDER_COUNT: number;
+  summary: InvoiceTotals & {
     AVG_TICKET: number;
     CLIENT_COUNT: number;
-    PENDING_VALUE: number;
   };
   dailySales: Array<{ SALE_DATE: string; SALES_VALUE: number; ORDER_COUNT: number }>;
   topProducts: Array<{ CODPROD: number; DESCRPROD: string; QUANTITY: number; SALES_VALUE: number }>;
@@ -217,6 +215,7 @@ type GeneralSalesCompany = { CODEMP: number; NOMEFANTASIA: string };
 type GeneralSalesData = {
   summary: {
     SALES_VALUE: number;
+    BONUS_VALUE: number;
     ORDER_COUNT: number;
     AVG_TICKET: number;
     CLIENT_COUNT: number;
@@ -1181,6 +1180,7 @@ export function SalesApp() {
   const [sellerName, setSellerName] = useState("");
   const [screen, setScreen] = useState<AppScreen>("home");
   const [orders, setOrders] = useState<ApiRow[]>([]);
+  const [orderInvoiceSummary, setOrderInvoiceSummary] = useState<{ sellerId: number; from: string; to: string; totals: InvoiceTotals } | null>(null);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [orderClients, setOrderClients] = useState<Client[]>([]);
@@ -1340,9 +1340,10 @@ export function SalesApp() {
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
       if (requestedSellerId) params.set("seller", String(requestedSellerId));
-      const result = await api<{ rows: ApiRow[]; user?: string; userId?: number; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
+      const result = await api<{ rows: ApiRow[]; invoiceTotals?: InvoiceTotals; user?: string; userId?: number; sellerId?: number; sellerName?: string }>(`/api/sankhya/data?${params}`);
       if (!current()) return;
       setOrders(result.rows);
+      setOrderInvoiceSummary(result.invoiceTotals ? { sellerId: requestedSellerId || Number(result.sellerId), from: dateFrom, to: dateTo, totals: result.invoiceTotals } : null);
       if (result.user) setUser(result.user);
       if (result.userId) setUserId(Number(result.userId));
       if (result.sellerId) setSellerId(Number(result.sellerId));
@@ -1350,6 +1351,7 @@ export function SalesApp() {
       setAuthenticated(true);
     } catch (error) {
       if (!current()) return;
+      setOrderInvoiceSummary(null);
       const cached = requestedSellerId === sellerId
         ? offlineData ?? (sellerId ? await getOfflineSnapshot(sellerId).catch(() => null) : await getLatestOfflineSnapshot().catch(() => null))
         : null;
@@ -1394,6 +1396,7 @@ export function SalesApp() {
     setUnreadMessages(0);
     setCanMonitorSales(false);
     setOrdersSelection(null);
+    setOrderInvoiceSummary(null);
     setPreparedDuplicate(null);
     setScreen("home");
     setClientPickerOpen(false);
@@ -1870,6 +1873,7 @@ export function SalesApp() {
           <OrdersScreen
             currentUserId={userId}
             orders={orders}
+            invoiceTotals={orderInvoiceSummary?.sellerId === orderFilters.sellerId && orderInvoiceSummary.from === orderFilters.from && orderInvoiceSummary.to === orderFilters.to ? orderInvoiceSummary.totals : undefined}
             loading={loadingOrders}
             drafts={drafts}
             offlineData={offlineData}
@@ -2326,7 +2330,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
   const [data, setData] = useState<GeneralSalesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
-  const cacheKey = `norte-sul-vendas:general-sales:v3:${applied.company}:${applied.from}:${applied.to}`;
+  const cacheKey = `norte-sul-vendas:general-sales:v4:${applied.company}:${applied.from}:${applied.to}`;
 
   useEffect(() => {
     if (!online) return;
@@ -2416,6 +2420,7 @@ function GeneralSalesScreen({ online }: { online: boolean }) {
         <>
           <section className="general-kpis" aria-label="Resumo do período">
             <article className="dashboard-kpi general-kpi sales"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(data.summary.SALES_VALUE))}</strong><em>{totalOrders.toLocaleString("pt-BR")} pedidos no total</em></div></article>
+            <article className="dashboard-kpi general-kpi"><span><FileText /></span><div><small>Bonificação</small><strong>{money(Number(data.summary.BONUS_VALUE ?? 0))}</strong></div></article>
             <article className="dashboard-kpi general-kpi ticket"><span><ClipboardList /></span><div><small>Ticket médio</small><strong>{money(Number(data.summary.AVG_TICKET))}</strong><em>por pedido faturado</em></div></article>
             <article className="dashboard-kpi general-kpi clients"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{Number(data.summary.CLIENT_COUNT).toLocaleString("pt-BR")}</strong><em>{Number(data.summary.SELLER_COUNT).toLocaleString("pt-BR")} vendedores</em></div></article>
             <article className="dashboard-kpi general-kpi orders"><span><PackageCheck /></span><div><small>Pedidos faturados</small><strong>{confirmedOrders.toLocaleString("pt-BR")}</strong><em>{totalOrders ? ((confirmedOrders / totalOrders) * 100).toFixed(1).replace(".", ",") : "0,0"}% do total</em></div></article>
@@ -2492,7 +2497,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
   const [generatingPanelReport, setGeneratingPanelReport] = useState<DashboardPanelReport | null>(null);
   const [reportError, setReportError] = useState("");
   const selectedSellerName = dashboardSellers.find((item) => Number(item.CODVEND) === selectedSellerId)?.APELIDO || sellerName;
-  const cacheKey = `norte-sul-vendas:dashboard:v2:${selectedSellerId}:${appliedPeriod.from}:${appliedPeriod.to}`;
+  const cacheKey = `norte-sul-vendas:dashboard:v3:${selectedSellerId}:${appliedPeriod.from}:${appliedPeriod.to}`;
   const periodLabel = `${displayPeriodDate(appliedPeriod.from)} a ${displayPeriodDate(appliedPeriod.to)}`;
 
   const selectPeriod = (from: string, to: string) => {
@@ -2825,7 +2830,8 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
         <>
           <section className="dashboard-kpis" aria-label="Resumo do período">
             <article className="dashboard-kpi featured"><span><CircleDollarSign /></span><div><small>Vendas no período</small><strong>{money(Number(dashboard.summary.SALES_VALUE))}</strong></div></article>
-            <article className="dashboard-kpi"><span><ShoppingBag /></span><div><small>Pedidos faturados</small><strong>{dashboard.summary.ORDER_COUNT}</strong></div></article>
+            <article className="dashboard-kpi"><span><FileText /></span><div><small>Bonificação</small><strong>{dashboard.summary.BONUS_VALUE == null ? "—" : money(Number(dashboard.summary.BONUS_VALUE))}</strong></div></article>
+            <article className="dashboard-kpi"><span><ShoppingBag /></span><div><small>Notas de venda</small><strong>{dashboard.summary.ORDER_COUNT}</strong></div></article>
             <article className="dashboard-kpi"><span><ClipboardList /></span><div><small>Ticket médio</small><strong>{money(Number(dashboard.summary.AVG_TICKET))}</strong><em>por pedido</em></div></article>
             <article className="dashboard-kpi"><span><UsersRound /></span><div><small>Clientes atendidos</small><strong>{dashboard.summary.CLIENT_COUNT}</strong></div></article>
           </section>
@@ -2836,7 +2842,7 @@ function HomeScreen({ sellerId, sellerName, online, canAnalyzeSellers }: { selle
               {dashboard.dailySales.length ? (
                 <div className="sales-bars" aria-label="Gráfico diário de vendas">
                   {dashboard.dailySales.map((item) => (
-                    <button className="sales-bar-item" key={item.SALE_DATE} title={`${item.SALE_DATE}: ${money(Number(item.SALES_VALUE))}. Abrir pedidos do dia.`} onClick={() => openDashboardDetail({ type: "day", date: item.SALE_DATE })}>
+                    <button className="sales-bar-item" key={item.SALE_DATE} title={`${item.SALE_DATE}: ${money(Number(item.SALES_VALUE))}. Abrir notas do dia.`} onClick={() => openDashboardDetail({ type: "day", date: item.SALE_DATE })}>
                       <span>{compactMoney(Number(item.SALES_VALUE)).replace(/^R\$\s*/, "")}</span>
                       <div><i style={{ height: `${Math.max(8, (Number(item.SALES_VALUE) / maxDaily) * 100)}%` }} /></div>
                       <small>{item.SALE_DATE.slice(0, 5)}</small>
@@ -2959,7 +2965,7 @@ function DashboardDetailPanel({
     <div className="dashboard-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <aside className="dashboard-detail-panel" role="dialog" aria-modal="true" aria-labelledby="dashboard-detail-title">
         <header>
-          <div><h2 id="dashboard-detail-title">{title}</h2><p>{selection.type === "day" ? "Pedidos faturados no dia selecionado." : selection.type === "inactiveClients" ? "Clientes da sua carteira sem comprar há 30 dias ou mais." : clientSegment ? `Clientes classificados no período de ${periodLabel}.` : periodLabel}</p></div>
+          <div><h2 id="dashboard-detail-title">{title}</h2><p>{selection.type === "day" ? "Notas de venda confirmadas no dia selecionado." : selection.type === "inactiveClients" ? "Clientes da sua carteira sem comprar há 30 dias ou mais." : clientSegment ? `Clientes classificados no período de ${periodLabel}.` : periodLabel}</p></div>
           <button className="modal-close" onClick={onClose} aria-label="Fechar painel"><X size={20} /></button>
         </header>
 
@@ -2976,7 +2982,7 @@ function DashboardDetailPanel({
               {rows.map((row) => (
                 <article key={String(row.NUNOTA)}>
                   <span className="order-icon"><ShoppingBag size={18} /></span>
-                  <div><strong>{String(row.NOMEPARC)}</strong><small>Pedido {String(row.NUNOTA)} · Cliente {String(row.CODPARC)}</small></div>
+                  <div><strong>{String(row.NOMEPARC)}</strong><small>Nota {String(row.NUMNOTA || row.NUNOTA)} · Cliente {String(row.CODPARC)}</small></div>
                   <em>{money(Number(row.VLRNOTA || 0))}</em>
                 </article>
               ))}
@@ -3024,6 +3030,7 @@ function DashboardDetailPanel({
 function OrdersScreen({
   currentUserId,
   orders,
+  invoiceTotals,
   loading,
   drafts,
   offlineData,
@@ -3043,6 +3050,7 @@ function OrdersScreen({
 }: {
   currentUserId: number;
   orders: ApiRow[];
+  invoiceTotals?: InvoiceTotals;
   loading: boolean;
   drafts: OrderDraft[];
   offlineData: OfflineSnapshot | null;
@@ -3130,7 +3138,6 @@ function OrdersScreen({
     const matchesSearch = `${draft.partner.NOMEPARC} ${draft.partner.CODPARC} ${draft.sellerName || ""}`.toLowerCase().includes(query.toLowerCase());
     return matchesSearch && (filter === "Todos" || filter === "Rascunhos");
   });
-  const total = orders.reduce((sum, order) => sum + Number(order.VLRNOTA || 0), 0);
   const sendDraft = async () => {
     if (!draftPendingSend) return;
     setSendingDraft(true);
@@ -3311,7 +3318,8 @@ function OrdersScreen({
       )}
 
       <section className="metrics" aria-label="Resumo dos pedidos">
-        <Metric icon={<CircleDollarSign />} label="Total dos pedidos" value={money(total)} />
+        <Metric icon={<CircleDollarSign />} label="Vendas faturadas" value={invoiceTotals ? money(Number(invoiceTotals.SALES_VALUE)) : "—"} />
+        <Metric icon={<FileText />} label="Bonificação faturada" value={invoiceTotals ? money(Number(invoiceTotals.BONUS_VALUE)) : "—"} />
         <Metric icon={<CheckCircle2 />} label="Faturados" value={String(orders.filter(isOrderBilled).length)} />
         <Metric blue icon={<FileText />} label="Rascunhos" value={String(drafts.length)} />
       </section>

@@ -11,7 +11,7 @@ const ast=ts.createSourceFile('sales-app.tsx',source,ts.ScriptTarget.Latest,true
 const declaration=name=>ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name);
 const compile=code=>ts.transpileModule(code,{compilerOptions:{jsx:ts.JsxEmit.React,target:ts.ScriptTarget.ES2022}}).outputText;
 const range={from:'2026-11-01',to:'2026-11-26'};
-const summary={SALES_VALUE:987654.32,ORDER_COUNT:74,AVG_TICKET:13346.68,CLIENT_COUNT:46,SELLER_COUNT:12,OPEN_ORDER_COUNT:9,OPEN_VALUE:6200};
+const summary={SALES_VALUE:987654.32,BONUS_VALUE:321.45,ORDER_COUNT:74,AVG_TICKET:13346.68,CLIENT_COUNT:46,SELLER_COUNT:12,OPEN_ORDER_COUNT:9,OPEN_VALUE:6200};
 const group={CODGRUPOPROD:4,DESCRGRUPOPROD:'Sementes',SALES_VALUE:summary.SALES_VALUE};
 const money=value=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const compactMoney=value=>'R$ '+new Intl.NumberFormat('pt-BR',{notation:'compact'}).format(value);
@@ -42,6 +42,7 @@ test('seller overview groups filters and keeps access to panel PDFs and drilldow
   assert.match(html,/aria-label="Período do desempenho"[\s\S]*Vendedor[\s\S]*Representante 08/);
   assert.match(html,/Produtos mais vendidos[\s\S]*Gerar PDF de Mix de vendas[\s\S]*Ver detalhes/);
   assert.match(html,/Carteira de clientes[\s\S]*30\+ dias sem comprar[\s\S]*60\+ dias[\s\S]*90\+ dias/);
+  assert.match(html,/Vendas no período[\s\S]*987\.654,32[\s\S]*Bonificação[\s\S]*321,45[\s\S]*Notas de venda/);
   assert.doesNotMatch(html,/Saiba mais|clientes únicos|Acompanhe seus resultados/);
 });
 test('consolidated overview retains company filter, billed and open orders, and the company breakdown',()=>{

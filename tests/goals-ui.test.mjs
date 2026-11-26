@@ -77,6 +77,10 @@ test('scoped tabs reuse complete authorized results and do not inherit filters o
     const select=(tree,label)=>find(find(tree,n=>n.type==='label'&&text(n)===label),n=>n.type==='select');
     render();await tick();render();await tick();let tree=render();
     assert.equal(find(tree,n=>n.type===Chart).props.summary.totals.actual,2500);
+    const rankings=find(tree,n=>n.props.className==='goals-table');
+    const rankingHtml=renderToStaticMarkup(rankings);
+    assert.match(rankingHtml,/title="As devoluções vinculadas às vendas elegíveis já foram descontadas deste valor\."/);
+    assert.doesNotMatch(rankingHtml,/<th>Carteira<\/th>/);
     const generalControls=find(tree,n=>n.props.className==='goals-filters');
     const generalHtml=renderToStaticMarkup(generalControls);assert.match(generalHtml,/<label>Empresa/);assert.match(generalHtml,/<label>Supervisor/);assert.equal((generalHtml.match(/<select/g)||[]).length,2);
     for(const [label,value] of [['Empresa','6'],['Supervisor','20']]){select(tree,label).props.onChange({target:{value}});tree=render();await tick();tree=render();}
