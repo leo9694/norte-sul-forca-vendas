@@ -105,12 +105,14 @@ test('configuration requires broad permission and validates thresholds, company 
   for(const override of [{onTrack:70,attention:90},{holidays:['bad']},{companies:[]},{userCompanies:{7:[99]}}])assert.equal((await(await api()).POST(post({action:'settings',settings:{...settings,...override}}))).status,400);
   assert.equal((await(await api()).POST(post({action:'settings',settings}))).status,200);
 });
-test('supervisor scope is hierarchical and edit grant is explicit, never the session boolean',async()=>{
-  for(const [role,type,canViewAll,canManage,broad] of [['Vendas','V',false,false,false],['Supervisor','V',true,false,false],['Diretoria','V',true,true,true],['Gerente','V',true,true,true],['Vendas','S',true,false,false]]){
+test('Sankhya supervisors have the same goal permissions and seller scope as directors; ordinary salespeople do not',async()=>{
+  for(const [role,type,broad] of [['Vendas','V',false],['Supervisor','V',true],['Diretoria','V',true],['Gerente','V',true],['Vendas','S',true],['Vendas',' Supervisor ',true]]){
     const sql=[];const lib=await loadModule('../app/api/_lib/goals-central.ts',{'./sankhya':{executeQuery:async(_s,q)=>{sql.push(q);return q.includes('NOMEGRUPO')?[{NOMEGRUPO:role,TIPVEND:type}]:[{CODVEND:4,APELIDO:'Vendedor',ATIVO:'S',CODGER:19}];}},'./goals-query':{}});
-    const access=await lib.goalAccess({...session,canAnalyzeSellers:true},settings);assert.equal(access.canViewAll,canViewAll);assert.equal(access.canManage,canManage);
-    if(canViewAll&&!broad)assert.match(sql[1],/CONNECT BY NOCYCLE PRIOR CODVEND=CODGER/);if(!canViewAll)assert.match(sql[1],/SELECT 4 FROM DUAL/);
-    if(canViewAll&&!broad){const grant=await lib.goalAccess(session,{...settings,supervisorEditors:[7],userCompanies:{7:[6]}});assert.equal(grant.canManage,true);assert.deepEqual(grant.companies,[6]);}
+    const access=await lib.goalAccess({...session,canAnalyzeSellers:true},{...settings,supervisorEditors:[],userCompanies:{7:[6]}});
+    assert.deepEqual([access.canViewAll,access.canManage,access.canConfigure],[broad,broad,broad]);
+    assert.match(sql[1],broad?/SELECT CODVEND FROM TGFVEN WHERE CODVEND>0/:/SELECT 4 FROM DUAL/);
+    assert.deepEqual(access.companies,[6]);
+    if(!broad)assert.equal((await lib.goalAccess(session,{...settings,supervisorEditors:[7]})).canManage,false);
   }
 });
 test('SQL counts invoices once, applies signed linked returns and only remaining wallet quantities',async()=>{

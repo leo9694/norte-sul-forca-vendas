@@ -3,14 +3,15 @@ import { readGoalQueryRows } from './goals-query';
 import { type GoalSettings, type GoalSeller, type GoalFact, type GoalCatalog } from '../../goals-central-model';
 export async function goalAccess(session:SankhyaSession,settings:GoalSettings){
   const roles=await executeQuery(session,`SELECT G.NOMEGRUPO,V.TIPVEND FROM TSIUSU U LEFT JOIN TSIGRU G ON G.CODGRUPO=U.CODGRUPO LEFT JOIN TGFVEN V ON V.CODVEND=U.CODVEND WHERE U.CODUSU=${session.userId}`);
-  const role=String(roles[0]?.NOMEGRUPO||'').trim().toLowerCase(),broad=role==='diretoria'||role==='gerente';
-  const supervisor=role==='supervisor'||String(roles[0]?.TIPVEND||'').trim().toUpperCase()==='S';
+  const role=String(roles[0]?.NOMEGRUPO||'').trim().toLowerCase();
+  const sellerType=String(roles[0]?.TIPVEND||'').trim().toLowerCase();
+  const broad=role==='diretoria'||role==='gerente'||role==='supervisor'||sellerType==='s'||sellerType==='supervisor';
   const ids=await executeQuery(session,`SELECT V.CODVEND,V.APELIDO,V.ATIVO,V.CODGER,V.CODREG,V.CODEMP,NVL(R.NOMEREG,'Sem regional') NOMEREG
     FROM TGFVEN V LEFT JOIN TSIREG R ON R.CODREG=V.CODREG WHERE V.CODVEND IN (
-      ${broad?'SELECT CODVEND FROM TGFVEN WHERE CODVEND>0':supervisor?`SELECT CODVEND FROM TGFVEN START WITH CODVEND=${session.sellerId} CONNECT BY NOCYCLE PRIOR CODVEND=CODGER`:`SELECT ${session.sellerId} FROM DUAL`}) ORDER BY V.APELIDO`);
+      ${broad?'SELECT CODVEND FROM TGFVEN WHERE CODVEND>0':`SELECT ${session.sellerId} FROM DUAL`}) ORDER BY V.APELIDO`);
   const companies=settings.userCompanies[String(session.userId)]||settings.companies;
   const sellers:GoalSeller[]=ids.map(row=>({id:Number(row.CODVEND),name:String(row.APELIDO),active:row.ATIVO==='S',supervisorId:Number(row.CODGER||0),regionId:Number(row.CODREG||0),region:String(row.NOMEREG),company:Number(row.CODEMP||0)}));
-  return {canViewAll:broad||supervisor,canManage:broad||(supervisor&&settings.supervisorEditors.includes(session.userId)),canConfigure:broad,
+  return {canViewAll:broad,canManage:broad,canConfigure:broad,
     sellerIds:sellers.map(s=>s.id),sellers,companies:settings.companies.filter(id=>companies.includes(id))};
 }
 export type GoalAccess=Awaited<ReturnType<typeof goalAccess>>;
